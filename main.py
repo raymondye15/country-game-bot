@@ -1027,16 +1027,21 @@ def lb_kb(mode: str):
 
 async def leaderboard_text(mode: str) -> str:
     field, label = LB_MODES[mode]
-    lines = [f"🏆 رتبه‌بندی جهانی (بر اساس {label}):\n"]
+    lines = [f"🏆 رتبه‌بندی جهانی (بر اساس {label}):"]
     for i, c in enumerate(await dbm.top_countries(field, 10), 1):
+        # two-line rows: in RTL chat a population figure and an area figure on
+        # one line visually merge into one giant number
         if mode == "pop":
-            val = f"👥 {c['population']:,} نفر | 🗺️ {c['area']:,}"
+            head = f"{i}. «{c['name']}» — 👥 {c['population']:,} نفر"
+            sub = f"🗺️ مساحت: {c['area']:,} کیلومتر مربع"
         elif mode == "area":
-            val = f"🗺️ {c['area']:,} کیلومتر مربع | 👥 {c['population']:,}"
+            head = f"{i}. «{c['name']}» — 🗺️ {c['area']:,} کیلومتر مربع"
+            sub = f"👥 جمعیت: {c['population']:,} نفر"
         else:
             net = c.get("last_fin", {}).get("net_tick", 0)
-            val = f"💰 خزانه {c['money']:,} | خالص روزانه {net:+,}"
-        lines.append(f"{i}. «{c['name']}» — {val}")
+            head = f"{i}. «{c['name']}» — 💰 خزانه: {c['money']:,}"
+            sub = f"📈 خالص روزانه: {net:+,} | 👥 جمعیت: {c['population']:,} نفر"
+        lines += ["", head, sub]
     return "\n".join(lines)
 
 @dp.message(F.text == "🏆 رتبه‌بندی")
