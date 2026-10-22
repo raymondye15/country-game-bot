@@ -12,7 +12,8 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.mongo import MongoStorage
+from motor.motor_asyncio import AsyncIOMotorClient
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -28,7 +29,12 @@ TICK_SECRET = os.environ.get("TICK_SECRET", "change-me")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0") or 0)
 
 bot = Bot(BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
+# FSM state lives in MongoDB (was in-memory: a restart/redeploy used to wipe a
+# half-finished country registration). Same cluster/DB as the game data.
+_fsm_client = AsyncIOMotorClient(os.environ.get("MONGODB_URI", "mongodb://localhost:27017"))
+dp = Dispatcher(storage=MongoStorage(client=_fsm_client,
+                                     db_name=os.environ.get("MONGODB_DB", "country_game"),
+                                     collection_name="fsm_states"))
 
 EN_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9 '\-]{1,29}$")
 
@@ -82,9 +88,9 @@ GUIDE_TEXT = (
     "• ⛏️ معادن بر اساس قاره‌ات تعیین شده‌اند: مصرف داخلی، فروش در بازار جهانی یا ساخت تجهیزات جنگی.\n"
     "• 🏗️ ساختمان‌ها تولید و رضایت را بالا می‌برند. مالیات از منوی کشور قابل تنظیم است.\n"
     "• 😊 اگر رضایت زیر ۳۰٪ بیاید اعتراض شروع می‌شود؛ اگر زیر ۱۵٪ بماند کشور فرو می‌پاشد و باید از اول بسازی. (کشتن مردم ممکن نیست!)\n"
-    "• ⚔️ جنگ ۳ روز واقعی طول می‌کشد و همزمان فقط یک جنگ می‌توانی داشته باشی. پیروزی کامل = تصرف کل کشور حریف؛ پیروزی جزئی = ۲۵٪ خاک و معادنش.\n"
+    "• ⚔️ جنگ ۳ روز واقعی طول می‌کشد و همزمان فقط یک جنگ می‌توانی داشته باشی. جنگ فقط با کشورهای هم‌سیاره ممکن است و بعد از هر جنگ، هر دو طرف ۳ روز آتش‌بس دارند. پیروزی کامل = تصرف کل کشور حریف؛ پیروزی جزئی = ۲۵٪ خاک و معادنش.\n"
     "• 🤝 همسایه شدن (۱ تا ۴ کشور) تجارت و لجستیک را ارزان و سریع می‌کند.\n"
-    "• 🛒 بازار جهانی برای همه بازیکن‌هاست، حتی خارج از گروه تو."
+    "• 🛒 بازار جهانی برای همه بازیکن‌هاست، حتی خارج از گروه تو. پیشنهادهای فروش بعد از ۷ روز منقضی می‌شوند و منابع فروش‌نرفته به انبارت برمی‌گردند."
 )
 
 # ---------------------------------------------------------------- registration wizard
@@ -328,6 +334,10 @@ async def build_cb(cb: types.CallbackQuery):
     await cb.answer()
 
 # ---------------------------------------------------------------- research
+def research_money_cost(r: dict) -> int:
+    """Money sink: large research nodes (50+ RP) also cost treasury money."""
+    return r["cost"] * 8 if r["cost"] >= 50 else 0
+
 @dp.message(F.text == "🔬 تحقیق")
 @dp.message(Command("research"))
 async def cmd_research(msg: types.Message):
@@ -353,7 +363,9 @@ async def cmd_research(msg: types.Message):
             elif r["prereq"] and r["prereq"] not in c["researched"]:
                 lines.append(f"🔒 {r['fa']} (نیازمند: {RESEARCH[r['prereq']]['fa']})")
             else:
-                lines.append(f"• {r['fa']} — {r['desc']} | هزینه {r['cost']} امتیاز، {r['hours']} ساعت")
+                mc = research_money_cost(r)
+                mc_txt = f" + {mc:,} 💰" if mc else ""
+                lines.append(f"• {r['fa']} — {r['desc']} | هزینه {r['cost']} امتیاز{mc_txt}، {r['hours']} ساعت")
                 kb.button(text=f"تحقیق: {r['fa']}", callback_data=f"research:start:{rid}")
     kb.adjust(1)
     await msg.answer("\n".join(lines), reply_markup=kb.as_markup())
@@ -370,7 +382,11 @@ async def research_start(cb: types.CallbackQuery):
         await cb.answer("این تحقیق قابل شروع نیست.", show_alert=True); return
     if c["rp"] < r["cost"]:
         await cb.answer(f"امتیاز کافی نداری ({c['rp']}/{r['cost']})", show_alert=True); return
+    mc = research_money_cost(r)
+    if c["money"] < mc:
+        await cb.answer(f"پول کافی برای این تحقیق نداری ({c['money']:,}/{mc:,} 💰)", show_alert=True); return
     c["rp"] -= r["cost"]
+    c["money"] -= mc
     hours = r["hours"] / (1 + logic.mod(c, "research_speed"))
     c["researching"] = {"id": rid, "finish_ts": logic.now_ts() + int(hours * 3600)}
     await dbm.save_country(c)
@@ -398,7 +414,7 @@ async def cmd_trade(msg: types.Message):
 async def trade_list(cb: types.CallbackQuery):
     c = await my_country(cb)
     if not c: return
-    offers = [o async for o in dbm.db.trade_offers.find({"seller_id": {"$ne": c["user_id"]}}).limit(15)]
+    offers = [o async for o in dbm.db.trade_offers.find({"seller_id": {"$ne": c["user_id"]}, "ts": {"$gt": logic.now_ts() - 7 * logic.DAY}}).limit(15)]
     if not offers:
         await cb.message.answer("بازار خالی است؛ اولین پیشنهاد فروش را تو ثبت کن!"); await cb.answer(); return
     kb = InlineKeyboardBuilder()
@@ -656,6 +672,14 @@ async def war_declare(cb: types.CallbackQuery):
         await cb.answer("کشور هدف فعال نیست.", show_alert=True); return
     if c.get("war_id") or target.get("war_id"):
         await cb.answer("یکی از دو کشور همین حالا در جنگ دیگری است (همزمان فقط یک جنگ).", show_alert=True); return
+    if target["planet"] != c["planet"]:
+        await cb.answer("جنگ بین‌سیاره‌ای ممکن نیست؛ فقط با کشورهای هم‌سیاره خودت می‌توانی بجنگی.", show_alert=True); return
+    t_now = logic.now_ts()
+    for side, who in ((c, "تو"), (target, "کشور هدف")):
+        pu = side.get("peace_until", 0)
+        if t_now < pu:
+            left_h = (pu - t_now) // 3600
+            await cb.answer(f"{who} در آتش‌بس پس از جنگ است ({left_h} ساعت مانده).", show_alert=True); return
     if logic.now_ts() < target.get("newbie_until", 0):
         await cb.answer("این کشور تازه‌وارد است و ۷ روز اول محافظت می‌شود.", show_alert=True); return
     if tid in c.get("naps", []):
@@ -728,7 +752,7 @@ async def notify(user_id: int, text: str):
 async def run_tick() -> dict:
     """Called every 1 minute by cron-job.com. Drives ALL game timers."""
     t = logic.now_ts()
-    stats = {"charges": 0, "research_done": 0, "daily": 0, "wars_resolved": 0, "collapsed": 0, "frozen": 0}
+    stats = {"charges": 0, "research_done": 0, "daily": 0, "wars_resolved": 0, "collapsed": 0, "frozen": 0, "offers_expired": 0}
     countries = await dbm.all_alive_countries()
     for c in countries:
         changed = False
@@ -793,6 +817,15 @@ async def run_tick() -> dict:
             await notify(war["defender_id"], msg_d)
         else:
             await notify(war["defender_id"], msg_d)
+    # trade offers expire after 7 days; unsold resources return to the seller
+    async for offer in dbm.db.trade_offers.find({"ts": {"$lt": t - 7 * logic.DAY}}):
+        await dbm.db.trade_offers.delete_one({"_id": offer["_id"]})
+        seller = await dbm.get_country(offer["seller_id"])
+        if seller and seller.get("alive", True):
+            seller["res"][offer["resource"]] = seller["res"].get(offer["resource"], 0) + offer["amount"]
+            await dbm.save_country(seller)
+            await notify(offer["seller_id"], f"🛒 پیشنهاد فروشت در بازار جهانی منقضی شد (۷ روز گذشت) و {RESOURCES[offer['resource']]} × {offer['amount']:,} به انبارت برگشت.")
+        stats["offers_expired"] += 1
     return stats
 
 async def handle_tick(request: web.Request) -> web.Response:
