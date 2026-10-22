@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pure game logic operating on country dicts (no Telegram / DB imports -> unit-testable)."""
 import random, time
-from game_data import PLANETS, GOVERNMENTS, RESEARCH, BUILDINGS, RANDOM_EVENTS
+from game_data import PLANETS, GOVERNMENTS, RESEARCH, BUILDINGS, RANDOM_EVENTS, RESOURCES
 
 HOUR = 3600
 DAY = 86400
@@ -66,8 +66,8 @@ def new_country(user_id: int, planet: str, continent: str, government: str,
         "money": 1500, "rp": 10,
         "res": {"food": 2000, "water": 2000, "energy": 3000, "materials": 300, "iron": 120, "titanium": 40, "special": 20},
         "mines": mines,
-        "buildings": {"farm": 2, "waterplant": 2, "powerplant": 1, "mine": 1, "factory": 1, "university": 0, "hospital": 0, "barracks": 0},
-        "soldiers": 0, "accept_migrants": True, "fin_trade": 0, "last_fin": {},
+        "buildings": {"farm": 3, "waterplant": 3, "powerplant": 1, "mine": 1, "factory": 1, "university": 0, "hospital": 0, "barracks": 0},
+        "soldiers": 0, "accept_migrants": True, "fin_trade": 0, "last_fin": {}, "fin_day": {}, "carry": {},
         "mig_in_today": [], "mig_out_today": 0, "last_mig_pool": 0, "last_pop_delta": 0,
         "happiness": 65, "tax_rate": 2,  # 1=low 2=mid 3=high
         "neighbors": [], "alliances": [], "naps": [],
@@ -76,6 +76,7 @@ def new_country(user_id: int, planet: str, continent: str, government: str,
         "researched": [], "researching": None,  # {id, finish_ts}
         "created_ts": t, "last_daily_ts": t, "last_seen_ts": t,
         "protest_days": 0, "shortage_days": 0, "war_id": None, "peace_until": 0, "newbie_until": t + 7 * DAY,
+        "last_econ_ts": t,
         "alive": True, "frozen": False,
     }
     c["mods_cache"] = compute_mods(c)
@@ -117,6 +118,12 @@ def do_exploration(c: dict, direction: str, other_countries: list) -> dict:
     c["money"] -= EXPLORE_COST["money"]
     c["res"]["energy"] -= EXPLORE_COST["energy"]
     c["res"]["food"] -= EXPLORE_COST["food"]
+    terrains = PLANETS[c["planet"]]["continents"][c["continent"]]["terrains"]
+    def rotate_terrain():
+        # the frontier moves: the NEXT stretch of land in this direction gets a
+        # fresh terrain (previously the label stayed the creation-time one forever)
+        choices = [t for t in terrains if t != b["label"]] or terrains
+        b["label"] = random.choice(choices)
     roll = random.random()
     if roll < 0.07 and other_countries:
         other = random.choice(other_countries)
@@ -126,20 +133,25 @@ def do_exploration(c: dict, direction: str, other_countries: list) -> dict:
         return {"ok": True, "kind": "country", "other": other,
                 "msg": f"تیم اکتشاف به مرز کشور «{other['name']}» رسید! این جهت بسته شد؛ می‌توانی از بخش دیپلماسی درخواست همسایگی بفرستی."}
     gain = exploration_gain(c)
-    if roll < 0.22:  # rough terrain: half
+    if roll < 0.22:  # rough terrain: half gain + small salvage
         gain //= 2
         c["area"] += gain
-        return {"ok": True, "kind": "rough", "gain": gain,
-                "msg": f"زمین سخت بود ({b['label']})؛ فقط {gain:,} کیلومتر مربع تصرف شد."}
-    if roll < 0.30:  # discovery
+        c["res"]["materials"] = c["res"].get("materials", 0) + 8
+        msg = f"زمین سخت بود ({b['label']})؛ فقط {gain:,} کیلومتر مربع تصرف شد و ۸ واحد مصالح از زمین جدید جمع شد."
+        rotate_terrain()
+        return {"ok": True, "kind": "rough", "gain": gain, "msg": msg}
+    if roll < 0.30:  # discovery: a new mine (now named in the message)
         res_found = random.choice(["iron", "titanium", "special", "materials"])
         c["mines"][res_found] = c["mines"].get(res_found, 0) + 1
         c["area"] += gain
-        return {"ok": True, "kind": "discovery", "gain": gain, "found": res_found,
-                "msg": f"اکتشاف موفق (+{gain:,} کیلومتر مربع) و یک معدن جدید کشف شد!"}
+        msg = f"⛏️ اکتشاف موفق (+{gain:,} کیلومتر مربع) و یک معدن جدید کشف شد: {RESOURCES.get(res_found, res_found)}! (از این به بعد هر روز از آن برداشت می‌کنی)"
+        rotate_terrain()
+        return {"ok": True, "kind": "discovery", "gain": gain, "found": res_found, "msg": msg}
     c["area"] += gain
-    return {"ok": True, "kind": "normal", "gain": gain,
-            "msg": f"اکتشاف موفق! +{gain:,} کیلومتر مربع به کشور اضافه شد."}
+    c["res"]["materials"] = c["res"].get("materials", 0) + 15
+    msg = f"اکتشاف موفق! +{gain:,} کیلومتر مربع به کشور اضافه شد و ۱۵ واحد مصالح از زمین جدید جمع شد."
+    rotate_terrain()
+    return {"ok": True, "kind": "normal", "gain": gain, "msg": msg}
 
 def military_power(c: dict) -> int:
     base = c["soldiers"] * (1 + mod(c, "military"))
@@ -209,34 +221,60 @@ def plan_migration(countries: list) -> list:
             moves.append((src_c["user_id"], dst["user_id"], amount))
     return moves
 
+def econ_tick(c: dict, frac: float = 1.0):
+    """Economy slice: production, consumption, taxes, factory income and upkeep
+    for `frac` of a day. Runs hourly with frac=1/24 (so resources and money flow
+    every real hour) and inside daily_tick with frac=1. Fractional amounts are
+    carried in c['carry'] so nothing is lost to rounding; the day's totals
+    accumulate in c['fin_day'] for the finance view."""
+    b = c["buildings"]
+    prod = production(c)
+    cons = {"food": c["population"] * 0.010,
+            "water": c["population"] * 0.008,
+            "energy": c["population"] * 0.005 + sum(b.values()) * 60}
+    carry = c.setdefault("carry", {})
+    for r in prod:
+        total = carry.get(r, 0.0) + (prod[r] - cons.get(r, 0)) * frac
+        applied = int(total) if total >= 0 else -int(-total)
+        carry[r] = total - applied
+        c["res"][r] = max(0, int(c["res"].get(r, 0) + applied))
+    tax_factor = {1: 0.6, 2: 1.0, 3: 1.6}[c["tax_rate"]]
+    income = c["population"] * 0.004 * tax_factor * (1 + mod(c, "economy"))
+    ub = building_upkeep(c)
+    ua = c.get("soldiers", 0) * 0.15
+    civic = c["population"] * 0.0008
+    factory_income = b.get("factory", 0) * 120
+    net = (income + factory_income - ub - ua - civic) * frac
+    cm = carry.get("__money__", 0.0) + net
+    whole = int(cm) if cm >= 0 else -int(-cm)
+    carry["__money__"] = cm - whole
+    c["money"] += whole
+    fd = c.setdefault("fin_day", {})
+    fd["tax"] = fd.get("tax", 0.0) + income * frac
+    fd["factory"] = fd.get("factory", 0.0) + factory_income * frac
+    fd["upkeep_buildings"] = fd.get("upkeep_buildings", 0.0) + ub * frac
+    fd["upkeep_army"] = fd.get("upkeep_army", 0.0) + ua * frac
+    fd["civic"] = fd.get("civic", 0.0) + civic * frac
+
 def daily_tick(c: dict, t: int = None) -> dict:
     """One in-game day of economy. Returns report lines + notifications."""
     t = t or now_ts()
     b = c["buildings"]
     report = []
-    prod = production(c)
-    cons = {
-        "food": c["population"] * 0.010,
-        "water": c["population"] * 0.008,
-        "energy": c["population"] * 0.005 + sum(b.values()) * 60,
-    }
-    for r in prod:
-        c["res"][r] = max(0, int(c["res"].get(r, 0) + prod[r] - cons.get(r, 0)))
+    econ_tick(c, 1.0)
     shortage = any(c["res"][r] <= 0 for r in ("food", "water", "energy"))
-    # taxes & upkeep
-    tax_factor = {1: 0.6, 2: 1.0, 3: 1.6}[c["tax_rate"]]
-    income = int(c["population"] * 0.004 * tax_factor * (1 + mod(c, "economy")))
-    upkeep_buildings = building_upkeep(c)
-    upkeep_army = int(c.get("soldiers", 0) * 0.15)  # money sink: daily army upkeep
-    civic = int(c["population"] * 0.0008)  # city services scale with population (money sink)
-    upkeep = upkeep_buildings + upkeep_army + civic
-    factory_income = b.get("factory", 0) * 120
-    c["money"] += income + factory_income - upkeep
+    # snapshot the accumulated day totals (hourly slices + this full-day call)
+    fd = c.get("fin_day", {})
     trade_in = c.get("fin_trade", 0)
     c["fin_trade"] = 0
+    income = int(fd.get("tax", 0)); factory_income = int(fd.get("factory", 0))
+    upkeep_buildings = int(fd.get("upkeep_buildings", 0))
+    upkeep_army = int(fd.get("upkeep_army", 0)); civic = int(fd.get("civic", 0))
+    upkeep = upkeep_buildings + upkeep_army + civic
     c["last_fin"] = {"tax": income, "factory": factory_income, "trade": trade_in,
                      "upkeep_buildings": upkeep_buildings, "upkeep_army": upkeep_army,
                      "civic": civic, "net_tick": income + factory_income - upkeep}
+    c["fin_day"] = {}
     # research points
     rp_gain = 2 + b.get("university", 0) * 6
     c["rp"] += rp_gain
@@ -378,6 +416,8 @@ def country_text(c: dict) -> str:
     for r, label in RESOURCES.items():
         extra = f" ({p['special_fa']})" if r == "special" else ""
         lines.append(f" • {label}{extra}: {c['res'].get(r, 0):,}")
+    prod = production(c)
+    lines.append(f"\n🏭 تولید روزانه: غذا +{int(prod['food']):,} | آب +{int(prod['water']):,} | انرژی +{int(prod['energy']):,} | مصالح +{int(prod['materials']):,} (جزئیات کامل در بخش 💰 درآمد و مالی)")
     lines.append("\n⛏️ معادن:")
     if c["mines"]:
         for r, cnt in c["mines"].items():

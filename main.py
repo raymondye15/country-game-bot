@@ -551,6 +551,11 @@ def finance_text(c: dict) -> str:
                   + int(c.get("soldiers", 0) * 0.15) + int(c["population"] * 0.0008))
     cap = logic.capacity(c)
     lines = [f"💰 درآمد و مالی «{c['name']}»", f"خزانه: {c['money']:,} 💰", ""]
+    fd = c.get("fin_day", {})
+    if any(fd.values()):
+        exp = int(fd.get("upkeep_buildings", 0) + fd.get("upkeep_army", 0) + fd.get("civic", 0))
+        lines += ["⏳ امروز تا این لحظه (تولید و درآمد ساعتی شده است):",
+                  f"• مالیات: +{int(fd.get('tax', 0)):,} | کارخانه: +{int(fd.get('factory', 0)):,} | هزینه‌ها: −{exp:,} 💰", ""]
     if fin:
         lines += ["📅 آخرین روز کامل:",
                   f"• مالیات: +{fin.get('tax', 0):,} 💰",
@@ -1046,9 +1051,14 @@ async def run_tick() -> dict:
             c["researching"] = None
             stats["research_done"] += 1; changed = True
             await notify(c["user_id"], f"🔬 تحقیق «{RESEARCH[rid]['fa']}» کامل شد! اثر آن از حالا فعال است.")
+        # hourly economy slice (1/24 of a day): production and income flow hourly
+        if t - c.get("last_econ_ts", c.get("last_daily_ts", t)) >= 3600:
+            logic.econ_tick(c, 1 / 24)
+            c["last_econ_ts"] = t; changed = True
         # daily economy tick
         if t - c.get("last_daily_ts", t) >= logic.DAY:
             rep = logic.daily_tick(c, t)
+            c["last_econ_ts"] = t
             stats["daily"] += 1; changed = True
             await notify(c["user_id"], "📅 گزارش روزانه کشورت:\n" + "\n".join(rep["report"]))
             if rep["collapsed"]:
