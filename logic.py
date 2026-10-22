@@ -164,6 +164,18 @@ def production(c: dict) -> dict:
         prod[r] = prod.get(r, 0) + cnt * 90 * mine_bonus * (1 + mod(c, "mine_prod"))
     return prod
 
+def upkeep_factor(c: dict) -> float:
+    """Progressive upkeep (late-game money sink): free up to 10 buildings, then
+    +6% per extra building, plus another +10% per building past 25.
+    20 buildings = x1.6, 28 = x2.4, 40 = x4.3, 60 = x7.5."""
+    total = sum(c["buildings"].values())
+    return 1 + max(0, total - 10) * 0.06 + max(0, total - 25) * 0.10
+
+def building_upkeep(c: dict) -> int:
+    b = c["buildings"]
+    base = sum(BUILDINGS[k]["upkeep"] * v for k, v in b.items())
+    return int(base * (1 + mod(c, "upkeep")) * upkeep_factor(c))
+
 def capacity(c: dict) -> int:
     """Soft population capacity of the land: area x 60 people."""
     return int(c["area"] * 60)
@@ -214,7 +226,7 @@ def daily_tick(c: dict, t: int = None) -> dict:
     # taxes & upkeep
     tax_factor = {1: 0.6, 2: 1.0, 3: 1.6}[c["tax_rate"]]
     income = int(c["population"] * 0.004 * tax_factor * (1 + mod(c, "economy")))
-    upkeep_buildings = int(sum(BUILDINGS[k]["upkeep"] * v for k, v in b.items()) * (1 + mod(c, "upkeep")))
+    upkeep_buildings = building_upkeep(c)
     upkeep_army = int(c.get("soldiers", 0) * 0.15)  # money sink: daily army upkeep
     civic = int(c["population"] * 0.0008)  # city services scale with population (money sink)
     upkeep = upkeep_buildings + upkeep_army + civic

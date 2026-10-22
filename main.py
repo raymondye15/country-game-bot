@@ -547,7 +547,7 @@ def finance_text(c: dict) -> str:
     b = c["buildings"]
     tax_factor = {1: 0.6, 2: 1.0, 3: 1.6}[c["tax_rate"]]
     est_tax = int(c["population"] * 0.004 * tax_factor * (1 + logic.mod(c, "economy")))
-    est_upkeep = (int(sum(BUILDINGS[k]["upkeep"] * v for k, v in b.items()) * (1 + logic.mod(c, "upkeep")))
+    est_upkeep = (logic.building_upkeep(c)
                   + int(c.get("soldiers", 0) * 0.15) + int(c["population"] * 0.0008))
     cap = logic.capacity(c)
     lines = [f"💰 درآمد و مالی «{c['name']}»", f"خزانه: {c['money']:,} 💰", ""]
@@ -560,8 +560,11 @@ def finance_text(c: dict) -> str:
                   f"• نگهداری ارتش: −{fin.get('upkeep_army', 0):,} 💰",
                   f"• خدمات شهری: −{fin.get('civic', 0):,} 💰",
                   f"• خالص روزانه (بدون تجارت): {fin.get('net_tick', 0):+,} 💰", ""]
-    lines += [f"🔮 برآورد امروز: مالیات ~{est_tax:,} 💰 | هزینه‌ها ~{est_upkeep:,} 💰",
-              "", "🏭 تولید روزانه (ناخالص):"]
+    lines += [f"🔮 برآورد امروز: مالیات ~{est_tax:,} 💰 | هزینه‌ها ~{est_upkeep:,} 💰"]
+    factor = logic.upkeep_factor(c)
+    if factor > 1:
+        lines.append(f"🏗️ ضریب نگهداری ساختمان‌ها: ×{factor:.1f} (از ۱۰ ساختمان به بعد، هزینه نگهداری به‌صورت تصاعدی بالا می‌رود)")
+    lines += ["", "🏭 تولید روزانه (ناخالص):"]
     for r, v in prod.items():
         if v:
             lines.append(f"• {RESOURCES.get(r, r)}: +{int(v):,}")
