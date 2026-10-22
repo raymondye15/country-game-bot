@@ -56,8 +56,10 @@ async def close_message(cb: types.CallbackQuery):
             pass
     await cb.answer()
 
-def main_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[
+def main_kb(selective: bool = False) -> ReplyKeyboardMarkup:
+    # NOTE: in groups a reply keyboard is shown to ALL members by Telegram design;
+    # callers must use selective=True (with a reply) or skip the keyboard in groups.
+    return ReplyKeyboardMarkup(resize_keyboard=True, selective=selective, keyboard=[
         [KeyboardButton(text="🏳️ کشور من"), KeyboardButton(text="🔭 اکتشاف")],
         [KeyboardButton(text="🏗️ ساختمان‌ها"), KeyboardButton(text="🔬 تحقیق")],
         [KeyboardButton(text="🛒 تجارت"), KeyboardButton(text="🤝 دیپلماسی")],
@@ -109,7 +111,7 @@ async def cmd_start(msg: types.Message, state: FSMContext):
             return
         c = await dbm.get_country(msg.from_user.id)
         if c and c.get("alive"):
-            await msg.answer(f"🏳️ کشور تو: «{c['name']}» — برای مدیریت کامل به پیوی ربات بیا.", reply_markup=main_kb())
+            await msg.answer(f"🏳️ کشور تو: «{c['name']}» — برای مدیریت کامل به پیوی ربات بیا.")
         else:
             await msg.answer("برای ساخت کشور به پیوی ربات پیام بده و /start را بزن. بازی گروهی از همین‌جا هم قابل انجام است، اگر کشور داشته باشی.")
         return
@@ -889,21 +891,29 @@ async def cmd_top(msg: types.Message):
 @dp.message(F.text == "❓ راهنما")
 @dp.message(F.text == "✖️ بستن منو")
 async def close_main_kb(msg: types.Message):
-    """Hide the main reply keyboard (the big menu buttons)."""
-    await msg.answer("منوی اصلی بسته شد. ✖️\nبرای باز کردنش /menu را بزن.", reply_markup=ReplyKeyboardRemove())
+    """Hide the main reply keyboard — per-user in groups (selective), so closing
+    one person's menu no longer closes it for everyone."""
+    if msg.chat.type == "private":
+        await msg.answer("منوی اصلی بسته شد. ✖️\nبرای باز کردنش /menu را بزن.", reply_markup=ReplyKeyboardRemove())
+    else:
+        await msg.reply("منو فقط برای تو بسته شد. ✖️ برای باز کردنش /menu را بزن.", reply_markup=ReplyKeyboardRemove(selective=True))
 
 @dp.message(Command("menu"))
 async def cmd_menu(msg: types.Message):
-    await msg.answer("منوی اصلی 👇", reply_markup=main_kb())
+    if msg.chat.type == "private":
+        await msg.answer("منوی اصلی 👇", reply_markup=main_kb())
+    else:
+        # selective + reply: Telegram shows this keyboard only to this user
+        await msg.reply("منوی اصلی 👇 (فقط برای تو باز شد)", reply_markup=main_kb(selective=True))
 
 @dp.message(Command("cancel"))
 async def cmd_cancel(msg: types.Message, state: FSMContext):
     await state.clear()
-    await msg.answer("✖️ عملیات جاری لغو شد.", reply_markup=main_kb())
+    await msg.answer("✖️ عملیات جاری لغو شد.", reply_markup=main_kb() if msg.chat.type == "private" else None)
 
 @dp.message(Command("help"))
 async def cmd_help(msg: types.Message):
-    await msg.answer(GUIDE_TEXT, reply_markup=main_kb())
+    await msg.answer(GUIDE_TEXT, reply_markup=main_kb() if msg.chat.type == "private" else None)
 
 @dp.message(Command("admin_reset_planet"))
 async def cmd_admin(msg: types.Message):
