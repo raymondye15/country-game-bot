@@ -14,7 +14,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.mongo import MongoStorage
 from motor.motor_asyncio import AsyncIOMotorClient
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, BotCommand
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, BotCommand, ReplyKeyboardRemove
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db as dbm
@@ -62,7 +62,7 @@ def main_kb() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🏗️ ساختمان‌ها"), KeyboardButton(text="🔬 تحقیق")],
         [KeyboardButton(text="🛒 تجارت"), KeyboardButton(text="🤝 دیپلماسی")],
         [KeyboardButton(text="🪖 ارتش و جنگ"), KeyboardButton(text="🏆 رتبه‌بندی")],
-        [KeyboardButton(text="❓ راهنما")],
+        [KeyboardButton(text="❓ راهنما"), KeyboardButton(text="✖️ بستن منو")],
     ])
 
 async def my_country(msg_or_cb) -> dict | None:
@@ -887,6 +887,15 @@ async def cmd_top(msg: types.Message):
     await msg.answer("\n".join(lines))
 
 @dp.message(F.text == "❓ راهنما")
+@dp.message(F.text == "✖️ بستن منو")
+async def close_main_kb(msg: types.Message):
+    """Hide the main reply keyboard (the big menu buttons)."""
+    await msg.answer("منوی اصلی بسته شد. ✖️\nبرای باز کردنش /menu را بزن.", reply_markup=ReplyKeyboardRemove())
+
+@dp.message(Command("menu"))
+async def cmd_menu(msg: types.Message):
+    await msg.answer("منوی اصلی 👇", reply_markup=main_kb())
+
 @dp.message(Command("cancel"))
 async def cmd_cancel(msg: types.Message, state: FSMContext):
     await state.clear()
@@ -1026,6 +1035,7 @@ async def main():
             BotCommand(command="start", description="🏳️ شروع بازی / ساخت کشور"),
             BotCommand(command="help", description="❓ راهنمای بازی"),
             BotCommand(command="cancel", description="✖️ لغو عملیات جاری"),
+            BotCommand(command="menu", description="📋 نمایش منوی اصلی"),
         ])
     except Exception:
         log.exception("set_my_commands failed")
