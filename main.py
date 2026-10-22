@@ -36,7 +36,7 @@ dp = Dispatcher(storage=MongoStorage(client=_fsm_client,
                                      db_name=os.environ.get("MONGODB_DB", "country_game"),
                                      collection_name="fsm_states"))
 
-EN_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9 '\-]{1,29}$")
+EN_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9 '\-]{1,59}$")
 
 # ---------------------------------------------------------------- helpers
 async def gate(msg: types.Message) -> bool:
@@ -181,7 +181,7 @@ async def reg_gov(cb: types.CallbackQuery, state: FSMContext):
     gid = cb.data.split(":")[2]
     await state.update_data(government=gid)
     await state.set_state(Reg.cname)
-    await cb.message.edit_text(f"حکومت: {GOVERNMENTS[gid]['fa']}\n\nحالا اسم کشورت را بنویس — حتماً باید انگلیسی باشد (۲ تا ۳۰ حرف):")
+    await cb.message.edit_text(f"حکومت: {GOVERNMENTS[gid]['fa']}\n\nحالا اسم کشورت را بنویس — حتماً باید انگلیسی باشد (۲ تا ۶۰ حرف):")
     await cb.answer()
 
 @dp.message(Reg.cname)
@@ -261,8 +261,8 @@ async def reg_city(msg: types.Message, state: FSMContext):
     text = msg.text.strip()
     if text in CITY_SKIP_WORDS:
         value = _default_city(await state.get_data())
-    elif not (2 <= len(text) <= 30):
-        await msg.answer("اسم شهر باید ۲ تا ۳۰ حرف باشد (یا بنویس «رد کردن» تا رد بشه):"); return
+    elif not (2 <= len(text) <= 60):
+        await msg.answer("اسم شهر باید ۲ تا ۶۰ حرف باشد (یا بنویس «رد کردن» تا رد بشه):"); return
     else:
         value = text
     await _city_advance(msg.answer, state, msg.from_user, value)
