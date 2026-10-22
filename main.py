@@ -1,0 +1,814 @@
+# -*- coding: utf-8 -*-
+"""
+Persian Telegram country-management game bot — TEXT ONLY (no maps/images).
+Stack: aiogram 3 + MongoDB Atlas (free) + Render web service (webhook)
+       + cron-job.com pinging /tick every 1 minute (game clock + keep-alive).
+Env: BOT_TOKEN, MONGODB_URI, MONGODB_DB, WEBHOOK_BASE_URL (or RENDER_EXTERNAL_URL),
+     TICK_SECRET, ADMIN_ID (optional), PORT
+"""
+import os, re, time, asyncio, logging
+from aiohttp import web
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+import db as dbm
+import logic
+from game_data import PLANETS, GOVERNMENTS, BUILDINGS, RESEARCH, RESOURCES, DIRECTIONS
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("gamebot")
+
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+TICK_SECRET = os.environ.get("TICK_SECRET", "change-me")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0") or 0)
+
+bot = Bot(BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
+
+EN_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9 '\-]{1,29}$")
+
+# ---------------------------------------------------------------- helpers
+async def gate(msg: types.Message) -> bool:
+    """Groups need >=3 distinct human users who interacted with the bot."""
+    if msg.chat.type == "private":
+        return True
+    if msg.from_user and not msg.from_user.is_bot:
+        count = await dbm.register_group_human(msg.chat.id, msg.from_user.id)
+    else:
+        count = await dbm.group_human_count(msg.chat.id)
+    if count < 3:
+        await msg.answer(f"🔒 این گروه هنوز فعال نشده است.\nبازی در گروه وقتی باز می‌شود که حداقل ۳ عضو انسان (غیر ربات) با ربات در همین گروه تعامل کنند.\nاعضای ثبت‌شده تا الان: {count}/۳")
+        return False
+    return True
+
+def main_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[
+        [KeyboardButton(text="🏳️ کشور من"), KeyboardButton(text="🔭 اکتشاف")],
+        [KeyboardButton(text="🏗️ ساختمان‌ها"), KeyboardButton(text="🔬 تحقیق")],
+        [KeyboardButton(text="🛒 تجارت"), KeyboardButton(text="🤝 دیپلماسی")],
+        [KeyboardButton(text="🪖 ارتش و جنگ"), KeyboardButton(text="🏆 رتبه‌بندی")],
+        [KeyboardButton(text="❓ راهنما")],
+    ])
+
+async def my_country(msg_or_cb) -> dict | None:
+    uid = msg_or_cb.from_user.id
+    c = await dbm.get_country(uid)
+    if not c or not c.get("alive", True):
+        text = "هنوز کشوری نداری (یا کشورت فروپاشیده است). با /start در پیوی ربات کشورت را بساز."
+        if isinstance(msg_or_cb, types.CallbackQuery):
+            await msg_or_cb.answer(text, show_alert=True)
+        else:
+            await msg_or_cb.answer(text)
+        return None
+    c["last_seen_ts"] = logic.now_ts()
+    return c
+
+GUIDE_TEXT = (
+    "❓ راهنمای بازی کشورداری\n\n"
+    "• هر بازیکن یک کشور واقعی دارد؛ همه کشورها توسط انسان‌های واقعی اداره می‌شوند.\n"
+    "• 🔭 اکتشاف: هر ساعت ۱ شارژ ذخیره می‌شود (شروع: تا ۳ شارژ). با هر اکتشاف حدود «مساحت اولیه ÷ ۲۴» زمین می‌گیری؛ در جهت دریا یا کشور دیگر متوقف می‌شود.\n"
+    "• ⛏️ معادن بر اساس قاره‌ات تعیین شده‌اند: مصرف داخلی، فروش در بازار جهانی یا ساخت تجهیزات جنگی.\n"
+    "• 🏗️ ساختمان‌ها تولید و رضایت را بالا می‌برند. مالیات از منوی کشور قابل تنظیم است.\n"
+    "• 😊 اگر رضایت زیر ۳۰٪ بیاید اعتراض شروع می‌شود؛ اگر زیر ۱۵٪ بماند کشور فرو می‌پاشد و باید از اول بسازی. (کشتن مردم ممکن نیست!)\n"
+    "• ⚔️ جنگ ۳ روز واقعی طول می‌کشد و همزمان فقط یک جنگ می‌توانی داشته باشی. پیروزی کامل = تصرف کل کشور حریف؛ پیروزی جزئی = ۲۵٪ خاک و معادنش.\n"
+    "• 🤝 همسایه شدن (۱ تا ۴ کشور) تجارت و لجستیک را ارزان و سریع می‌کند.\n"
+    "• 🛒 بازار جهانی برای همه بازیکن‌هاست، حتی خارج از گروه تو."
+)
+
+# ---------------------------------------------------------------- registration wizard
+class Reg(StatesGroup):
+    planet = State(); continent = State(); government = State()
+    cname = State(); capital = State(); city1 = State(); city2 = State(); city3 = State()
+
+@dp.message(CommandStart())
+async def cmd_start(msg: types.Message, state: FSMContext):
+    if msg.chat.type != "private":
+        if not await gate(msg):
+            return
+        c = await dbm.get_country(msg.from_user.id)
+        if c and c.get("alive"):
+            await msg.answer(f"🏳️ کشور تو: «{c['name']}» — برای مدیریت کامل به پیوی ربات بیا.", reply_markup=main_kb())
+        else:
+            await msg.answer("برای ساخت کشور به پیوی ربات پیام بده و /start را بزن. بازی گروهی از همین‌جا هم قابل انجام است، اگر کشور داشته باشی.")
+        return
+    c = await dbm.get_country(msg.from_user.id)
+    if c and c.get("alive"):
+        await msg.answer(f"خوش برگشتی، حاکم «{c['name']}»! 👋", reply_markup=main_kb())
+        return
+    if c and not c.get("alive"):
+        await dbm.delete_country(msg.from_user.id)
+    kb = InlineKeyboardBuilder()
+    for pid, p in PLANETS.items():
+        cnt = await dbm.planet_country_count(pid)
+        kb.button(text=f"🪐 {p['name']} ({p['fa']}) — {cnt}/{p['capacity']} کشور", callback_data=f"reg:planet:{pid}")
+    kb.adjust(1)
+    await state.set_state(Reg.planet)
+    await msg.answer("به بازی کشورداری خوش آمدی! 🌍\nاول سیاره‌ات را انتخاب کن:", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("reg:planet:"), Reg.planet)
+async def reg_planet(cb: types.CallbackQuery, state: FSMContext):
+    pid = cb.data.split(":")[2]
+    p = PLANETS[pid]
+    if await dbm.planet_country_count(pid) >= p["capacity"]:
+        await cb.answer("این سیاره پر شده است؛ سیاره دیگری انتخاب کن.", show_alert=True); return
+    await state.update_data(planet=pid)
+    kb = InlineKeyboardBuilder()
+    for cid, cont in p["continents"].items():
+        kb.button(text=f"{cont['name']} ({cont['fa']})", callback_data=f"reg:cont:{cid}")
+    kb.adjust(1)
+    await state.set_state(Reg.continent)
+    await cb.message.edit_text(f"🪐 {p['name']} — {p['desc']}\n\nحالا قاره را انتخاب کن:", reply_markup=kb.as_markup())
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("reg:cont:"), Reg.continent)
+async def reg_cont(cb: types.CallbackQuery, state: FSMContext):
+    cid = cb.data.split(":")[2]
+    data = await state.get_data()
+    cont = PLANETS[data["planet"]]["continents"][cid]
+    await state.update_data(continent=cid)
+    kb = InlineKeyboardBuilder()
+    for gid, g in GOVERNMENTS.items():
+        kb.button(text=f"{g['emoji']} {g['fa']}", callback_data=f"reg:gov:{gid}")
+    kb.button(text="📖 راهنمای حکومت‌ها", callback_data="reg:govguide")
+    kb.adjust(2, 2, 2, 2, 1)
+    await state.set_state(Reg.government)
+    await cb.message.edit_text(f"قاره {cont['name']}: {cont['desc']}\n\nحالا نوع حکومت را انتخاب کن (با دکمه راهنما می‌توانی اثر هر کدام را ببینی):", reply_markup=kb.as_markup())
+    await cb.answer()
+
+@dp.callback_query(F.data == "reg:govguide", Reg.government)
+async def reg_govguide(cb: types.CallbackQuery):
+    txt = "📖 راهنمای انواع حکومت:\n\n" + "\n\n".join(f"{g['emoji']} {g['fa']}: {g['guide']}" for g in GOVERNMENTS.values())
+    await cb.message.answer(txt)
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("reg:gov:"), Reg.government)
+async def reg_gov(cb: types.CallbackQuery, state: FSMContext):
+    gid = cb.data.split(":")[2]
+    await state.update_data(government=gid)
+    await state.set_state(Reg.cname)
+    await cb.message.edit_text(f"حکومت: {GOVERNMENTS[gid]['fa']}\n\nحالا اسم کشورت را بنویس — حتماً باید انگلیسی باشد (۲ تا ۳۰ حرف):")
+    await cb.answer()
+
+@dp.message(Reg.cname)
+async def reg_cname(msg: types.Message, state: FSMContext):
+    name = msg.text.strip()
+    if not EN_NAME.match(name):
+        await msg.answer("❌ اسم کشور باید انگلیسی باشد (فقط حروف انگلیسی، عدد، فاصله). دوباره بفرست:"); return
+    if await dbm.get_country_by_name(name):
+        await msg.answer("❌ این اسم قبلاً گرفته شده؛ اسم دیگری انتخاب کن:"); return
+    await state.update_data(cname=name)
+    await state.set_state(Reg.capital)
+    await msg.answer("اسم پایتخت را بنویس — آن هم حتماً انگلیسی:")
+
+@dp.message(Reg.capital)
+async def reg_capital(msg: types.Message, state: FSMContext):
+    cap = msg.text.strip()
+    if not EN_NAME.match(cap):
+        await msg.answer("❌ اسم پایتخت باید انگلیسی باشد. دوباره بفرست:"); return
+    await state.update_data(capital=cap)
+    await state.set_state(Reg.city1)
+    await msg.answer("اسم اولین شهر بزرگت را خودت انتخاب کن و بفرست:")
+
+@dp.message(Reg.city1)
+async def reg_city1(msg: types.Message, state: FSMContext):
+    if not (2 <= len(msg.text.strip()) <= 30):
+        await msg.answer("اسم شهر باید ۲ تا ۳۰ حرف باشد:"); return
+    await state.update_data(city1=msg.text.strip()); await state.set_state(Reg.city2)
+    await msg.answer("اسم دومین شهر بزرگت:")
+
+@dp.message(Reg.city2)
+async def reg_city2(msg: types.Message, state: FSMContext):
+    if not (2 <= len(msg.text.strip()) <= 30):
+        await msg.answer("اسم شهر باید ۲ تا ۳۰ حرف باشد:"); return
+    await state.update_data(city2=msg.text.strip()); await state.set_state(Reg.city3)
+    await msg.answer("اسم سومین شهر بزرگت:")
+
+@dp.message(Reg.city3)
+async def reg_city3(msg: types.Message, state: FSMContext):
+    if not (2 <= len(msg.text.strip()) <= 30):
+        await msg.answer("اسم شهر باید ۲ تا ۳۰ حرف باشد:"); return
+    data = await state.get_data()
+    c = logic.new_country(msg.from_user.id, data["planet"], data["continent"], data["government"],
+                           data["cname"], data["capital"], [data["city1"], data["city2"], msg.text.strip()],
+                           msg.from_user.username or "")
+    await dbm.save_country(c)
+    await state.clear()
+    others = await dbm.continent_countries(c["planet"], c["continent"], c["user_id"])
+    hint = ("\n\nکشورهای هم‌قاره‌ای تو: " + "، ".join(o["name"] for o in others[:5]) +
+            "\nاز بخش 🤝 دیپلماسی می‌توانی برایشان درخواست همسایگی بفرستی (۱ تا ۴ همسایه).") if others else \
+           "\n\nفعلاً در قاره تو کشور دیگری نیست؛ پس نمی‌توانی همسایه انتخاب کنی — بقیه باید همسایه تو شوند!"
+    await msg.answer("🎉 کشورت ساخته شد!\n\n" + logic.country_text(c) + hint, reply_markup=main_kb())
+
+# ---------------------------------------------------------------- country / exploration
+@dp.message(F.text == "🏳️ کشور من")
+@dp.message(Command("country"))
+async def cmd_country(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    logic.regen_charges(c); await dbm.save_country(c)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⚙️ تنظیم مالیات", callback_data="tax:menu")
+    kb.button(text="🔭 اکتشاف", callback_data="explore:menu")
+    kb.adjust(2)
+    await msg.answer(logic.country_text(c), reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data == "tax:menu")
+async def tax_menu(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    kb = InlineKeyboardBuilder()
+    for rate, label in ((1, "کم (رضایت ↑، درآمد ↓)"), (2, "متوسط"), (3, "زیاد (درآمد ↑، رضایت ↓)")):
+        mark = "✅ " if c["tax_rate"] == rate else ""
+        kb.button(text=mark + label, callback_data=f"tax:set:{rate}")
+    kb.adjust(1)
+    await cb.message.answer(f"مالیات فعلی: {c['tax_rate']}", reply_markup=kb.as_markup()); await cb.answer()
+
+@dp.callback_query(F.data.startswith("tax:set:"))
+async def tax_set(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    c["tax_rate"] = int(cb.data.split(":")[2]); await dbm.save_country(c)
+    await cb.message.edit_text(f"✅ نرخ مالیات روی {c['tax_rate']} تنظیم شد."); await cb.answer()
+
+@dp.message(F.text == "🔭 اکتشاف")
+@dp.message(Command("explore"))
+async def cmd_explore(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    logic.regen_charges(c); await dbm.save_country(c)
+    await send_explore_menu(msg, c)
+
+async def send_explore_menu(msg: types.Message, c: dict):
+    kb = InlineKeyboardBuilder()
+    for d, label in DIRECTIONS.items():
+        b = c["borders"][d]
+        st = {"open": "باز", "sea": "🌊 دریا", "country": "🚧 مرز کشور"}[b["status"]]
+        kb.button(text=f"{label} — {st}", callback_data=f"explore:go:{d}")
+    kb.adjust(2)
+    nxt = ""
+    cap = logic.explore_cap(c)
+    if c["explore_charges"] < cap:
+        left = max(0, logic.HOUR - (logic.now_ts() - c["last_charge_ts"]))
+        nxt = f"\nشارژ بعدی: {left // 60} دقیقه دیگر"
+    await msg.answer(f"🔭 شارژ اکتشاف: {c['explore_charges']}/{cap}{nxt}\nهزینه هر اکتشاف: ⚡۱۵ 💧غذا ۲۰ 💰۲۵\nجهت اکتشاف را انتخاب کن:", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data == "explore:menu")
+async def explore_menu_cb(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    logic.regen_charges(c); await dbm.save_country(c)
+    await send_explore_menu(cb.message, c); await cb.answer()
+
+@dp.callback_query(F.data.startswith("explore:go:"))
+async def explore_go(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    logic.regen_charges(c)
+    direction = cb.data.split(":")[2]
+    others_raw = await dbm.continent_countries(c["planet"], c["continent"], c["user_id"])
+    others = [o for o in others_raw if o["user_id"] not in c["neighbors"]]
+    res = logic.do_exploration(c, direction, others)
+    await dbm.save_country(c)
+    await cb.message.answer(("✅ " if res["ok"] else "❌ ") + res["msg"] + f"\n🗺️ مساحت فعلی: {c['area']:,} کیلومتر مربع | شارژ باقی‌مانده: {c['explore_charges']}")
+    await cb.answer()
+
+# ---------------------------------------------------------------- buildings
+@dp.message(F.text == "🏗️ ساختمان‌ها")
+@dp.message(Command("build"))
+async def cmd_build(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    kb = InlineKeyboardBuilder()
+    lines = ["🏗️ ساختمان‌های تو:\n"]
+    for bid, b in BUILDINGS.items():
+        cost = "، ".join(f"{k}:{v}" for k, v in b["cost"].items())
+        lines.append(f"{b['fa']} — سطح {c['buildings'].get(bid, 0)} ({b['desc']})\nهزینه ساخت: {cost}")
+        kb.button(text=f"ساخت {b['fa']}", callback_data=f"build:{bid}")
+    kb.adjust(1)
+    await msg.answer("\n".join(lines), reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("build:"))
+async def build_cb(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    bid = cb.data.split(":")[1]
+    cost = BUILDINGS[bid]["cost"]
+    for k, v in cost.items():
+        have = c["money"] if k == "money" else c["res"].get(k, 0)
+        if have < v:
+            await cb.answer(f"منابع کافی نداری ({k}: {have}/{v})", show_alert=True); return
+    for k, v in cost.items():
+        if k == "money": c["money"] -= v
+        else: c["res"][k] -= v
+    c["buildings"][bid] = c["buildings"].get(bid, 0) + 1
+    await dbm.save_country(c)
+    await cb.message.answer(f"✅ {BUILDINGS[bid]['fa']} ساخته شد — سطح {c['buildings'][bid]}")
+    await cb.answer()
+
+# ---------------------------------------------------------------- research
+@dp.message(F.text == "🔬 تحقیق")
+@dp.message(Command("research"))
+async def cmd_research(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    lines = [f"🔬 امتیاز تحقیق: {c['rp']}\n"]
+    if c.get("researching"):
+        r = RESEARCH[c["researching"]["id"]]
+        left = max(0, c["researching"]["finish_ts"] - logic.now_ts())
+        lines.append(f"⏳ در حال تحقیق: {r['fa']} — {left // 3600} ساعت و {(left % 3600) // 60} دقیقه مانده\n")
+    kb = InlineKeyboardBuilder()
+    by_branch = {}
+    for rid, r in RESEARCH.items():
+        if r.get("planet") and r["planet"] != c["planet"]:
+            continue
+        by_branch.setdefault(r["branch"], []).append((rid, r))
+    for branch, items in by_branch.items():
+        lines.append(f"\n🌿 شاخه {branch}:")
+        for rid, r in items:
+            if rid in c["researched"]:
+                lines.append(f"✅ {r['fa']}")
+            elif r["prereq"] and r["prereq"] not in c["researched"]:
+                lines.append(f"🔒 {r['fa']} (نیازمند: {RESEARCH[r['prereq']]['fa']})")
+            else:
+                lines.append(f"• {r['fa']} — {r['desc']} | هزینه {r['cost']} امتیاز، {r['hours']} ساعت")
+                kb.button(text=f"تحقیق: {r['fa']}", callback_data=f"research:start:{rid}")
+    kb.adjust(1)
+    await msg.answer("\n".join(lines), reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("research:start:"))
+async def research_start(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    rid = cb.data.split(":")[2]
+    r = RESEARCH[rid]
+    if c.get("researching"):
+        await cb.answer("یک تحقیق دیگر در جریان است.", show_alert=True); return
+    if rid in c["researched"] or (r["prereq"] and r["prereq"] not in c["researched"]):
+        await cb.answer("این تحقیق قابل شروع نیست.", show_alert=True); return
+    if c["rp"] < r["cost"]:
+        await cb.answer(f"امتیاز کافی نداری ({c['rp']}/{r['cost']})", show_alert=True); return
+    c["rp"] -= r["cost"]
+    hours = r["hours"] / (1 + logic.mod(c, "research_speed"))
+    c["researching"] = {"id": rid, "finish_ts": logic.now_ts() + int(hours * 3600)}
+    await dbm.save_country(c)
+    await cb.message.answer(f"🔬 تحقیق «{r['fa']}» شروع شد؛ حدود {hours:.1f} ساعت طول می‌کشد.")
+    await cb.answer()
+
+# ---------------------------------------------------------------- trade (global market)
+class Trade(StatesGroup):
+    resource = State(); amount = State(); price = State()
+
+@dp.message(F.text == "🛒 تجارت")
+@dp.message(Command("trade"))
+async def cmd_trade(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 بازار جهانی (خرید)", callback_data="trade:list")
+    kb.button(text="➕ ثبت پیشنهاد فروش", callback_data="trade:new")
+    kb.adjust(1)
+    fee_note = "کارمزد بازار: ۵٪ (با همسایه‌ها: بدون کارمزد در معامله مستقیم از پروفایل کشور)"
+    await msg.answer(f"🛒 تجارت جهانی — حتی با بازیکن‌های خارج از گروه تو.\n{fee_note}", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data == "trade:list")
+async def trade_list(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    offers = [o async for o in dbm.db.trade_offers.find({"seller_id": {"$ne": c["user_id"]}}).limit(15)]
+    if not offers:
+        await cb.message.answer("بازار خالی است؛ اولین پیشنهاد فروش را تو ثبت کن!"); await cb.answer(); return
+    kb = InlineKeyboardBuilder()
+    lines = ["📋 پیشنهادهای بازار جهانی:\n"]
+    for o in offers:
+        seller = await dbm.get_country(o["seller_id"])
+        sname = seller["name"] if seller else "?"
+        lines.append(f"• {RESOURCES[o['resource']]} × {o['amount']:,} — قیمت {o['price']:,} 💰 (فروشنده: {sname})")
+        kb.button(text=f"خرید از {sname} ({o['price']:,}💰)", callback_data=f"trade:buy:{o['_id']}")
+    kb.adjust(1)
+    await cb.message.answer("\n".join(lines), reply_markup=kb.as_markup()); await cb.answer()
+
+@dp.callback_query(F.data.startswith("trade:buy:"))
+async def trade_buy(cb: types.CallbackQuery):
+    from bson import ObjectId
+    c = await my_country(cb)
+    if not c: return
+    try:
+        oid = ObjectId(cb.data.split(":")[2])
+    except Exception:
+        await cb.answer("پیشنهاد نامعتبر است.", show_alert=True); return
+    offer = await dbm.db.trade_offers.find_one({"_id": oid})
+    if not offer:
+        await cb.answer("این پیشنهاد دیگر نیست.", show_alert=True); return
+    seller = await dbm.get_country(offer["seller_id"])
+    if not seller or not seller.get("alive"):
+        await dbm.db.trade_offers.delete_one({"_id": oid}); await cb.answer("فروشنده دیگر فعال نیست.", show_alert=True); return
+    fee = 0 if seller["user_id"] in c["neighbors"] else int(offer["price"] * 0.05)
+    total = offer["price"] + fee
+    if c["money"] < total:
+        await cb.answer(f"پول کافی نداری ({c['money']:,}/{total:,})", show_alert=True); return
+    c["money"] -= total
+    c["res"][offer["resource"]] = c["res"].get(offer["resource"], 0) + offer["amount"]
+    seller["money"] += offer["price"]
+    await dbm.save_country(c); await dbm.save_country(seller)
+    await dbm.db.trade_offers.delete_one({"_id": oid})
+    try:
+        await bot.send_message(seller["user_id"], f"🛒 «{c['name']}» پیشنهاد تو را خرید: {RESOURCES[offer['resource']]} × {offer['amount']:,} به قیمت {offer['price']:,} 💰")
+    except Exception:
+        pass
+    await cb.message.answer(f"✅ خرید انجام شد! {RESOURCES[offer['resource']]} × {offer['amount']:,} (کارمزد: {fee:,} 💰)")
+    await cb.answer()
+
+@dp.callback_query(F.data == "trade:new")
+async def trade_new(cb: types.CallbackQuery, state: FSMContext):
+    c = await my_country(cb)
+    if not c: return
+    kb = InlineKeyboardBuilder()
+    for r, label in RESOURCES.items():
+        kb.button(text=f"{label} (موجودی: {c['res'].get(r, 0):,})", callback_data=f"trade:res:{r}")
+    kb.adjust(1)
+    await state.set_state(Trade.resource)
+    await cb.message.answer("کدام منبع را می‌فروشی؟", reply_markup=kb.as_markup()); await cb.answer()
+
+@dp.callback_query(F.data.startswith("trade:res:"), Trade.resource)
+async def trade_res(cb: types.CallbackQuery, state: FSMContext):
+    await state.update_data(resource=cb.data.split(":")[2])
+    await state.set_state(Trade.amount)
+    await cb.message.answer("چه مقدار می‌فروشی؟ (فقط عدد بفرست)"); await cb.answer()
+
+@dp.message(Trade.amount)
+async def trade_amount(msg: types.Message, state: FSMContext):
+    c = await my_country(msg)
+    if not c: return
+    data = await state.get_data()
+    try:
+        amount = int(msg.text.strip())
+    except ValueError:
+        await msg.answer("فقط عدد بفرست:"); return
+    if amount <= 0 or amount > c["res"].get(data["resource"], 0):
+        await msg.answer("مقدار نامعتبر است (بیشتر از موجودی یا صفر). دوباره بفرست:"); return
+    await state.update_data(amount=amount); await state.set_state(Trade.price)
+    await msg.answer("قیمت کل به 💰 (عدد بفرست):")
+
+@dp.message(Trade.price)
+async def trade_price(msg: types.Message, state: FSMContext):
+    c = await my_country(msg)
+    if not c: return
+    data = await state.get_data()
+    try:
+        price = int(msg.text.strip())
+    except ValueError:
+        await msg.answer("فقط عدد بفرست:"); return
+    if price <= 0:
+        await msg.answer("قیمت باید مثبت باشد:"); return
+    c["res"][data["resource"]] -= data["amount"]
+    await dbm.save_country(c)
+    await dbm.db.trade_offers.insert_one({"seller_id": c["user_id"], "resource": data["resource"], "amount": data["amount"], "price": price, "ts": logic.now_ts()})
+    await state.clear()
+    await msg.answer(f"✅ پیشنهاد فروش ثبت شد: {RESOURCES[data['resource']]} × {data['amount']:,} به قیمت {price:,} 💰 — در بازار جهانی برای همه قابل خرید است.")
+
+# ---------------------------------------------------------------- diplomacy
+@dp.message(F.text == "🤝 دیپلماسی")
+@dp.message(Command("diplomacy"))
+async def cmd_diplomacy(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    lines = [f"🤝 دیپلماسی «{c['name']}»\n\nهمسایه‌ها ({len(c['neighbors'])}/۴):"]
+    for nid in c["neighbors"]:
+        n = await dbm.get_country(nid)
+        lines.append(f" • {n['name'] if n else '(حذف شده)'}")
+    if c["alliances"]:
+        lines.append("\nاتحادها:")
+        for aid in c["alliances"]:
+            a = await dbm.get_country(aid)
+            lines.append(f" • {a['name'] if a else '?'}")
+    lines.append("\nبرای تعامل با یک کشور، اسم انگلیسی‌اش را با دستور زیر بفرست:\n/find <CountryName>")
+    await msg.answer("\n".join(lines))
+
+@dp.message(Command("find"))
+async def cmd_find(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    parts = msg.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await msg.answer("اسم کشور را بنویس: /find <CountryName>"); return
+    target = await dbm.get_country_by_name(parts[1])
+    if not target or not target.get("alive"):
+        await msg.answer("چنین کشور فعالی پیدا نشد."); return
+    if target["user_id"] == c["user_id"]:
+        await msg.answer("این کشور خودت است!"); return
+    p = PLANETS[target["planet"]]
+    kb = InlineKeyboardBuilder()
+    tid = target["user_id"]
+    if tid not in c["neighbors"] and len(c["neighbors"]) < 4:
+        kb.button(text="🏘️ درخواست همسایگی", callback_data=f"req:neighbor:{tid}")
+    if tid not in c["alliances"]:
+        kb.button(text="🛡️ درخواست اتحاد", callback_data=f"req:alliance:{tid}")
+    if tid not in c.get("naps", []):
+        kb.button(text="🕊️ پیمان عدم تجاوز", callback_data=f"req:nap:{tid}")
+    kb.button(text="⚔️ اعلان جنگ", callback_data=f"war:declare:{tid}")
+    kb.adjust(1)
+    rel = []
+    if tid in c["neighbors"]: rel.append("همسایه")
+    if tid in c["alliances"]: rel.append("متحد")
+    if tid in c.get("naps", []): rel.append("پیمان عدم تجاوز")
+    await msg.answer(
+        f"🏳️ «{target['name']}» — پایتخت {target['capital']}\n🪐 {p['name']} / {p['continents'][target['continent']]['name']}\n"
+        f"👥 جمعیت: {target['population']:,} | 🗺️ مساحت: {target['area']:,} | 🪖 قدرت نظامی: {logic.military_power(target):,}\n"
+        f"رابطه: {('، '.join(rel)) if rel else 'بدون رابطه'}",
+        reply_markup=kb.as_markup())
+
+REQ_LABEL = {"neighbor": "🏘️ درخواست همسایگی", "alliance": "🛡️ درخواست اتحاد", "nap": "🕊️ پیمان عدم تجاوز"}
+
+@dp.callback_query(F.data.startswith("req:"))
+async def req_send(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    _, kind, tid = cb.data.split(":")
+    tid = int(tid)
+    target = await dbm.get_country(tid)
+    if not target or not target.get("alive"):
+        await cb.answer("کشور مقصد فعال نیست.", show_alert=True); return
+    if kind == "neighbor" and (len(c["neighbors"]) >= 4 or len(target["neighbors"]) >= 4):
+        await cb.answer("یکی از دو کشور سقف ۴ همسایه را پر کرده است.", show_alert=True); return
+    await dbm.create_request(kind, c["user_id"], tid)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ قبول", callback_data=f"reqok:{kind}:{c['user_id']}")
+    kb.button(text="❌ رد", callback_data=f"reqno:{kind}:{c['user_id']}")
+    kb.adjust(2)
+    try:
+        await bot.send_message(tid, f"{REQ_LABEL[kind]} از کشور «{c['name']}» برای تو ارسال شد.", reply_markup=kb.as_markup())
+        await cb.answer("درخواست ارسال شد.")
+    except Exception:
+        await cb.answer("نتوانستم به حاکم آن کشور پیام بدهم (ربات را استارت نکرده است).", show_alert=True)
+
+@dp.callback_query(F.data.startswith("reqok:"))
+async def req_accept(cb: types.CallbackQuery):
+    _, kind, fid = cb.data.split(":")
+    fid = int(fid)
+    me = await dbm.get_country(cb.from_user.id)
+    other = await dbm.get_country(fid)
+    if not me or not other or not await dbm.pop_request(kind, fid, cb.from_user.id):
+        await cb.answer("این درخواست دیگر معتبر نیست.", show_alert=True); return
+    field = {"neighbor": "neighbors", "alliance": "alliances", "nap": "naps"}[kind]
+    for a, b in ((me, other), (other, me)):
+        if b["user_id"] not in a[field]:
+            a[field].append(b["user_id"])
+    # becoming neighbors also opens the blocked border direction if present
+    for a, b in ((me, other), (other, me)):
+        if kind == "neighbor":
+            for d, binfo in a["borders"].items():
+                if binfo.get("country_id") == b["user_id"]:
+                    binfo["label"] = f"مرز کشور همسایه {b['name']}"
+    await dbm.save_country(me); await dbm.save_country(other)
+    await cb.message.edit_text(f"✅ {REQ_LABEL[kind]} از «{other['name']}» قبول شد.")
+    try:
+        await bot.send_message(fid, f"✅ کشور «{me['name']}» {REQ_LABEL[kind]} تو را قبول کرد.")
+    except Exception:
+        pass
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("reqno:"))
+async def req_decline(cb: types.CallbackQuery):
+    _, kind, fid = cb.data.split(":")
+    await dbm.pop_request(kind, int(fid), cb.from_user.id)
+    await cb.message.edit_text("❌ درخواست رد شد.")
+    await cb.answer()
+
+# ---------------------------------------------------------------- army & war
+@dp.message(F.text == "🪖 ارتش و جنگ")
+@dp.message(Command("army"))
+async def cmd_army(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    lines = [f"🪖 ارتش «{c['name']}»\nسرباز: {c['soldiers']:,} | قدرت نظامی: {logic.military_power(c):,} | قدرت دفاعی: {logic.defense_power(c):,}"]
+    kb = InlineKeyboardBuilder()
+    kb.button(text="➕ سربازگیری ۱۰۰ نفر (🧱۵۰ ⛏️۲۰ 💰۱۵۰)", callback_data="army:recruit")
+    if c.get("war_id"):
+        war = await dbm.db.wars.find_one({"_id": c["war_id"]})
+        if war:
+            enemy_id = war["defender_id"] if war["attacker_id"] == c["user_id"] else war["attacker_id"]
+            enemy = await dbm.get_country(enemy_id)
+            left = max(0, war["end_ts"] - logic.now_ts())
+            my_score = war["att_score"] if war["attacker_id"] == c["user_id"] else war["def_score"]
+            lines.append(f"\n⚔️ در جنگ با «{enemy['name'] if enemy else '?'}» هستی — پایان جنگ: {left // 3600} ساعت دیگر | امتیاز جنگی تو: {my_score:,}")
+            kb.button(text="💥 عملیات نظامی امروز", callback_data="war:op")
+    kb.adjust(1)
+    lines.append("\nبرای اعلان جنگ، کشور هدف را با /find پیدا کن.")
+    await msg.answer("\n".join(lines), reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data == "army:recruit")
+async def army_recruit(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    cost = {"materials": 50, "iron": 20, "money": 150}
+    for k, v in cost.items():
+        have = c["money"] if k == "money" else c["res"].get(k, 0)
+        if have < v:
+            await cb.answer(f"منابع کافی نداری ({k})", show_alert=True); return
+    c["money"] -= 150; c["res"]["materials"] -= 50; c["res"]["iron"] -= 20
+    c["soldiers"] += 100
+    await dbm.save_country(c)
+    await cb.message.answer(f"🪖 ۱۰۰ سرباز جدید گرفته شد. کل سرباز: {c['soldiers']:,}")
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("war:declare:"))
+async def war_declare(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    tid = int(cb.data.split(":")[2])
+    target = await dbm.get_country(tid)
+    if not target or not target.get("alive"):
+        await cb.answer("کشور هدف فعال نیست.", show_alert=True); return
+    if c.get("war_id") or target.get("war_id"):
+        await cb.answer("یکی از دو کشور همین حالا در جنگ دیگری است (همزمان فقط یک جنگ).", show_alert=True); return
+    if logic.now_ts() < target.get("newbie_until", 0):
+        await cb.answer("این کشور تازه‌وارد است و ۷ روز اول محافظت می‌شود.", show_alert=True); return
+    if tid in c.get("naps", []):
+        await cb.answer("با این کشور پیمان عدم تجاوز داری.", show_alert=True); return
+    res = await dbm.db.wars.insert_one({
+        "attacker_id": c["user_id"], "defender_id": tid,
+        "start_ts": logic.now_ts(), "end_ts": logic.now_ts() + 3 * logic.DAY,
+        "att_score": 0, "def_score": 0, "ops": {}})
+    c["war_id"] = res.inserted_id; target["war_id"] = res.inserted_id
+    c["happiness"] = max(0, c["happiness"] - 3)
+    await dbm.save_country(c); await dbm.save_country(target)
+    try:
+        await bot.send_message(tid, f"🚨 اعلان جنگ! کشور «{c['name']}» به تو اعلان جنگ داد. جنگ ۳ روز طول می‌کشد؛ هر روز از بخش «ارتش و جنگ» عملیات نظامی انجام بده تا امتیاز جنگی بگیری.")
+    except Exception:
+        pass
+    await cb.message.answer(f"⚔️ جنگ با «{target['name']}» شروع شد! ۳ روز واقعی طول می‌کشد. هر روز یک عملیات نظامی می‌توانی انجام بدهی.")
+    await cb.answer()
+
+@dp.callback_query(F.data == "war:op")
+async def war_op(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c or not c.get("war_id"): return
+    war = await dbm.db.wars.find_one({"_id": c["war_id"]})
+    if not war:
+        await cb.answer("جنگ پیدا نشد.", show_alert=True); return
+    day_key = str(int((logic.now_ts() - war["start_ts"]) // logic.DAY))
+    op_key = f"{c['user_id']}:{day_key}"
+    if war.get("ops", {}).get(op_key):
+        await cb.answer("امروز عملیاتت را انجام داده‌ای؛ فردا دوباره.", show_alert=True); return
+    import random as _r
+    gain = int(logic.military_power(c) * _r.uniform(0.25, 0.45)) + _r.randint(10, 60)
+    field = "att_score" if war["attacker_id"] == c["user_id"] else "def_score"
+    war.setdefault("ops", {})[op_key] = gain
+    war[field] += gain
+    await dbm.db.wars.replace_one({"_id": war["_id"]}, war)
+    await cb.message.answer(f"💥 عملیات نظامی انجام شد: +{gain:,} امتیاز جنگی.")
+    await cb.answer()
+
+# ---------------------------------------------------------------- leaderboard / guide / admin
+@dp.message(F.text == "🏆 رتبه‌بندی")
+@dp.message(Command("top"))
+async def cmd_top(msg: types.Message):
+    if not await gate(msg): return
+    lines = ["🏆 رتبه‌بندی جهانی (بر اساس مساحت):\n"]
+    for i, c in enumerate(await dbm.top_countries("area", 10), 1):
+        lines.append(f"{i}. «{c['name']}» — 🗺️ {c['area']:,} | 👥 {c['population']:,} | 🪖 {logic.military_power(c):,}")
+    await msg.answer("\n".join(lines))
+
+@dp.message(F.text == "❓ راهنما")
+@dp.message(Command("help"))
+async def cmd_help(msg: types.Message):
+    await msg.answer(GUIDE_TEXT, reply_markup=main_kb())
+
+@dp.message(Command("admin_reset_planet"))
+async def cmd_admin(msg: types.Message):
+    if msg.from_user.id != ADMIN_ID:
+        return
+    parts = msg.text.split()
+    if len(parts) == 2 and parts[1] in PLANETS:
+        res = await dbm.db.countries.delete_many({"planet": parts[1]})
+        await msg.answer(f"♻️ سیاره {parts[1]} ریست شد ({res.deleted_count} کشور حذف شد).")
+
+# ---------------------------------------------------------------- minute tick (cron-job.com)
+async def notify(user_id: int, text: str):
+    try:
+        await bot.send_message(user_id, text)
+    except Exception:
+        pass
+
+async def run_tick() -> dict:
+    """Called every 1 minute by cron-job.com. Drives ALL game timers."""
+    t = logic.now_ts()
+    stats = {"charges": 0, "research_done": 0, "daily": 0, "wars_resolved": 0, "collapsed": 0, "frozen": 0}
+    countries = await dbm.all_alive_countries()
+    for c in countries:
+        changed = False
+        # inactivity freeze flag (14 days)
+        if t - c.get("last_seen_ts", t) > 14 * logic.DAY and not c.get("frozen"):
+            c["frozen"] = True; changed = True; stats["frozen"] += 1
+        # exploration charges (1/hour, stored up to cap)
+        if logic.regen_charges(c, t):
+            stats["charges"] += 1; changed = True
+        # research completion
+        if c.get("researching") and t >= c["researching"]["finish_ts"]:
+            rid = c["researching"]["id"]
+            c["researched"].append(rid)
+            c["researching"] = None
+            stats["research_done"] += 1; changed = True
+            await notify(c["user_id"], f"🔬 تحقیق «{RESEARCH[rid]['fa']}» کامل شد! اثر آن از حالا فعال است.")
+        # daily economy tick
+        if t - c.get("last_daily_ts", t) >= logic.DAY:
+            rep = logic.daily_tick(c, t)
+            stats["daily"] += 1; changed = True
+            await notify(c["user_id"], "📅 گزارش روزانه کشورت:\n" + "\n".join(rep["report"]))
+            if rep["collapsed"]:
+                c["alive"] = False
+                stats["collapsed"] += 1
+                await notify(c["user_id"], "💥 کشور تو به دلیل اعتراض‌های پی‌درپی و رضایت بسیار پایین فروپاشید! با /start یک کشور تازه بساز.")
+        if changed:
+            await dbm.save_country(c)
+    # wars whose 3 days are over
+    async for war in dbm.db.wars.find({"end_ts": {"$lte": t}}):
+        attacker = await dbm.get_country(war["attacker_id"])
+        defender = await dbm.get_country(war["defender_id"])
+        await dbm.db.wars.delete_one({"_id": war["_id"]})
+        if not attacker or not defender:
+            continue
+        outcome = logic.resolve_war(war, attacker, defender)
+        stats["wars_resolved"] += 1
+        if outcome["result"] == "annex":
+            msg_a = f"🏆 پیروزی کامل! کشور «{defender['name']}» به طور کامل تصرف شد (امتیاز {outcome['a_score']:,} در برابر {outcome['d_score']:,}). خاک، معادن و نیمی از منابعش به تو رسید."
+            msg_d = f"💀 کشور تو در جنگ با «{attacker['name']}» به طور کامل سقوط کرد (امتیاز {outcome['d_score']:,} در برابر {outcome['a_score']:,}). با /start کشور تازه‌ای بساز."
+            await dbm.save_country(attacker)
+            await dbm.delete_country(defender["user_id"])
+        elif outcome["result"] == "partial":
+            msg_a = f"🏆 پیروزی در جنگ با «{defender['name']}»! (امتیاز {outcome['a_score']:,} در برابر {outcome['d_score']:,}) — {outcome['taken']:,} کیلومتر مربع و بخشی از معادن و غرامت گرفتی."
+            msg_d = f"⚔️ جنگ با «{attacker['name']}» را باختی (امتیاز {outcome['d_score']:,} در برابر {outcome['a_score']:,}) و ۲۵٪ از خاکت را از دست دادی."
+            await dbm.save_country(attacker); await dbm.save_country(defender)
+        else:
+            msg_a = f"⚔️ حمله‌ات به «{defender['name']}» شکست خورد (امتیاز {outcome['a_score']:,} در برابر {outcome['d_score']:,}) و {outcome['reparations']:,} 💰 غرامت دادی."
+            msg_d = f"🛡️ دفاع موفق! حمله «{attacker['name']}» دفع شد (امتیاز {outcome['d_score']:,} در برابر {outcome['a_score']:,}) و {outcome['reparations']:,} 💰 غرامت گرفتی."
+            await dbm.save_country(attacker); await dbm.save_country(defender)
+        await notify(war["attacker_id"], msg_a)
+        if outcome["result"] != "annex":
+            await notify(war["defender_id"], msg_d)
+        else:
+            await notify(war["defender_id"], msg_d)
+    return stats
+
+async def handle_tick(request: web.Request) -> web.Response:
+    secret = request.query.get("secret") or request.headers.get("X-Tick-Secret")
+    if secret != TICK_SECRET:
+        return web.json_response({"error": "forbidden"}, status=403)
+    stats = await run_tick()
+    return web.json_response({"ok": True, "ts": logic.now_ts(), **stats})
+
+async def handle_health(request: web.Request) -> web.Response:
+    return web.json_response({"ok": True, "service": "country-game-bot"})
+
+async def handle_webhook(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        update = types.Update.model_validate(data, context={"bot": bot})
+        await dp.feed_update(bot, update)
+    except Exception:
+        log.exception("webhook error")
+    return web.json_response({"ok": True})
+
+async def main():
+    dbm.init_db()
+    await dbm.ensure_indexes()
+    base = os.environ.get("WEBHOOK_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL", "")
+    app = web.Application()
+    app.router.add_get("/", handle_health)
+    app.router.add_get("/health", handle_health)
+    app.router.add_get("/tick", handle_tick)
+    app.router.add_post("/tick", handle_tick)
+    port = int(os.environ.get("PORT", "8080"))
+    if base:
+        app.router.add_post("/webhook", handle_webhook)
+        await bot.set_webhook(base.rstrip("/") + "/webhook")
+        log.info("webhook set to %s/webhook", base)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        await web.TCPSite(runner, "0.0.0.0", port).start()
+        log.info("web server on %s", port)
+        await asyncio.Event().wait()
+    else:
+        # local dev fallback: polling + tick server
+        await bot.delete_webhook(drop_pending_updates=True)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        await web.TCPSite(runner, "0.0.0.0", port).start()
+        log.info("polling mode on port %s", port)
+        await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
