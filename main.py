@@ -206,50 +206,83 @@ async def reg_capital(msg: types.Message, state: FSMContext):
         await msg.answer("❌ اسم پایتخت باید انگلیسی باشد. دوباره بفرست:"); return
     await state.update_data(capital=cap)
     await state.set_state(Reg.city1)
-    await msg.answer("اسم اولین شهر بزرگت را خودت انتخاب کن و بفرست:")
+    await msg.answer("اسم اولین شهر بزرگت را خودت انتخاب کن و بفرست — این قدم اختیاریه: اگه نمی‌خوای اسم بذاری، دکمه «رد کردن» رو بزن تا اسم پیش‌فرض بگیره (نوشتن «رد کردن» هم کار می‌کنه):", reply_markup=_city_skip_kb(True))
 
-@dp.message(Reg.city1)
-async def reg_city1(msg: types.Message, state: FSMContext):
-    if msg.chat.type != "private":
-        await msg.answer("ساخت کشور فقط در پیوی ربات ممکن است؛ به پیوی ربات بیا و /start بزن."); return
-    if not (2 <= len(msg.text.strip()) <= 30):
-        await msg.answer("اسم شهر باید ۲ تا ۳۰ حرف باشد:"); return
-    await state.update_data(city1=msg.text.strip()); await state.set_state(Reg.city2)
-    await msg.answer("اسم دومین شهر بزرگت:")
+CITY_SKIP_WORDS = {"رد کردن", "رد", "skip", "Skip", "-"}
 
-@dp.message(Reg.city2)
-async def reg_city2(msg: types.Message, state: FSMContext):
-    if msg.chat.type != "private":
-        await msg.answer("ساخت کشور فقط در پیوی ربات ممکن است؛ به پیوی ربات بیا و /start بزن."); return
-    if not (2 <= len(msg.text.strip()) <= 30):
-        await msg.answer("اسم شهر باید ۲ تا ۳۰ حرف باشد:"); return
-    await state.update_data(city2=msg.text.strip()); await state.set_state(Reg.city3)
-    await msg.answer("اسم سومین شهر بزرگت:")
+def _city_skip_kb(first: bool = False):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⏭️ رد کردن این شهر", callback_data="reg:skipcity")
+    if first:
+        kb.button(text="⏭️ رد کردن هر سه شهر", callback_data="reg:skipall")
+    kb.adjust(1)
+    return kb.as_markup()
 
-@dp.message(Reg.city3)
-async def reg_city3(msg: types.Message, state: FSMContext):
-    if msg.chat.type != "private":
-        await msg.answer("ساخت کشور فقط در پیوی ربات ممکن است؛ به پیوی ربات بیا و /start بزن."); return
-    if not (2 <= len(msg.text.strip()) <= 30):
-        await msg.answer("اسم شهر باید ۲ تا ۳۰ حرف باشد:"); return
+async def _finish_reg(answer, state, user, cities):
     data = await state.get_data()
-    c = logic.new_country(msg.from_user.id, data["planet"], data["continent"], data["government"],
-                           data["cname"], data["capital"], [data["city1"], data["city2"], msg.text.strip()],
-                           msg.from_user.username or "")
+    c = logic.new_country(user.id, data["planet"], data["continent"], data["government"],
+                          data["cname"], data["capital"], cities, user.username or "")
     try:
         await dbm.save_country(c)
     except Exception:
-        # BUGFIX: two players finishing registration with the same country name at
-        # the same moment hit the unique index; the loser used to get silence.
+        # two players finishing registration with the same country name at the
+        # same moment hit the unique index; the loser gets a friendly error
         await state.clear()
-        await msg.answer("❌ متأسفانه همین لحظه بازیکن دیگری همین اسم کشور را ثبت کرد. با /start دوباره شروع کن و اسم دیگری انتخاب کن.")
+        await answer("❌ متأسفانه همین لحظه بازیکن دیگری همین اسم کشور را ثبت کرد. با /start دوباره شروع کن و اسم دیگری انتخاب کن.")
         return
     await state.clear()
     others = await dbm.continent_countries(c["planet"], c["continent"], c["user_id"])
     hint = ("\n\nکشورهای هم‌قاره‌ای تو: " + "، ".join(o["name"] for o in others[:5]) +
             "\nاز بخش 🤝 دیپلماسی می‌توانی برایشان درخواست همسایگی بفرستی (۱ تا ۴ همسایه).") if others else \
            "\n\nفعلاً در قاره تو کشور دیگری نیست؛ پس نمی‌توانی همسایه انتخاب کنی — بقیه باید همسایه تو شوند!"
-    await msg.answer("🎉 کشورت ساخته شد!\n\n" + logic.country_text(c) + hint, reply_markup=main_kb())
+    await answer("🎉 کشورت ساخته شد!\n\n" + logic.country_text(c) + hint, reply_markup=main_kb())
+
+async def _city_advance(answer, state, user, value):
+    cur = await state.get_state()
+    if cur == Reg.city1.state:
+        await state.update_data(city1=value); await state.set_state(Reg.city2)
+        await answer("اسم دومین شهر بزرگت (اختیاری):", reply_markup=_city_skip_kb())
+    elif cur == Reg.city2.state:
+        await state.update_data(city2=value); await state.set_state(Reg.city3)
+        await answer("اسم سومین شهر بزرگت (اختیاری):", reply_markup=_city_skip_kb())
+    else:
+        data = await state.get_data()
+        await _finish_reg(answer, state, user, [data["city1"], data["city2"], value])
+
+def _default_city(data: dict) -> str:
+    return logic.random_city_name([data.get("capital", ""), data.get("city1", ""), data.get("city2", "")])
+
+@dp.message(Reg.city1)
+@dp.message(Reg.city2)
+@dp.message(Reg.city3)
+async def reg_city(msg: types.Message, state: FSMContext):
+    if msg.chat.type != "private":
+        await msg.answer("ساخت کشور فقط در پیوی ربات ممکن است؛ به پیوی ربات بیا و /start بزن."); return
+    text = msg.text.strip()
+    if text in CITY_SKIP_WORDS:
+        value = _default_city(await state.get_data())
+    elif not (2 <= len(text) <= 30):
+        await msg.answer("اسم شهر باید ۲ تا ۳۰ حرف باشد (یا بنویس «رد کردن» تا رد بشه):"); return
+    else:
+        value = text
+    await _city_advance(msg.answer, state, msg.from_user, value)
+
+@dp.callback_query(F.data.in_({"reg:skipcity", "reg:skipall"}))
+async def reg_skip_city(cb: types.CallbackQuery, state: FSMContext):
+    if cb.message.chat.type != "private":
+        await cb.answer("ساخت کشور فقط در پیوی ربات ممکن است؛ به پیوی ربات بیا.", show_alert=True); return
+    cur = await state.get_state()
+    if cur not in (Reg.city1.state, Reg.city2.state, Reg.city3.state):
+        await cb.answer(); return
+    data = await state.get_data()
+    if cb.data == "reg:skipall":
+        cities = [data[k] for k in ("city1", "city2", "city3") if data.get(k)]
+        while len(cities) < 3:
+            cities.append(logic.random_city_name([data.get("capital", "")] + cities))
+        await _finish_reg(cb.message.answer, state, cb.from_user, cities)
+    else:
+        await _city_advance(cb.message.answer, state, cb.from_user, _default_city(data))
+    await cb.answer("⏭️ رد شد")
 
 # ---------------------------------------------------------------- country / exploration
 @dp.message(F.text == "🏳️ کشور من")

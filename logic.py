@@ -438,6 +438,22 @@ def resolve_war(war: dict, attacker: dict, defender: dict) -> dict:
     defender["peace_until"] = peace
     return outcome
 
+_CITY_ROOTS = ["Ar", "Bel", "Cor", "Dra", "El", "Fal", "Gor", "Hel", "Il", "Kor",
+               "Lun", "Mar", "Nor", "Ost", "Rav", "Sel", "Tor", "Vel", "Zar", "Xan",
+               "Bran", "Kel", "Mir", "Tal", "Vor", "Ash", "Dun", "Gal"]
+_CITY_SUFFIXES = ["ia", "opolis", "grad", "port", "haven", "reach", "fall", "crest",
+                  "mere", "spire", "holm", "wick", "bourne", "gate"]
+
+def random_city_name(taken=()) -> str:
+    """A generated English city name not in `taken` (used when a player skips
+    naming one of their 3 big cities — naming them is optional)."""
+    taken_l = {str(t).lower() for t in taken if t}
+    for _ in range(60):
+        name = random.choice(_CITY_ROOTS) + random.choice(_CITY_SUFFIXES)
+        if name.lower() not in taken_l:
+            return name
+    return "New " + random.choice(_CITY_ROOTS) + random.choice(_CITY_SUFFIXES)
+
 def country_text(c: dict) -> str:
     from game_data import PLANETS, GOVERNMENTS, RESOURCES
     p = PLANETS[c["planet"]]
