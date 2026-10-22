@@ -100,6 +100,8 @@ GUIDE_TEXT = (
     "• 🛒 بازار جهانی برای همه بازیکن‌هاست، حتی خارج از گروه تو. پیشنهادهای فروش بعد از ۷ روز منقضی می‌شوند و منابع فروش‌نرفته به انبارت برمی‌گردند. در گروه، برای ترید مستقیم با یک بازیکن روی پیامش ریپلای بزن و بنویس «ترید»."
     "• 💰 از بخش «درآمد و مالی» ببین پولت دقیقاً از کجا می‌آید و کجا می‌رود.\n"
     "• 🧳 مهاجرت: کشورهای شاد از آدم‌های بی‌کشور و مردم کشورهای ناراضی مهاجر می‌گیرند؛ با فرودگاه بین‌سیاره‌ای (ساختمان) از سیاره‌های دیگر هم می‌توانی مهاجر بگیری.\n"
+    "• 👶 زاد و ولد و مرگ‌ومیر: هر ساعت در کشورت تولد و مرگ رخ می‌دهد؛ رضایت بالا و بیمارستان تولد را بیشتر و مرگ‌ومیر را کمتر می‌کند و گرسنگی مرگ‌ومیر را شدید بالا می‌برد. همه سیستم‌های زنده بازی (اقتصاد، جمعیت، رضایت، امتیاز تحقیق، مهاجرت) ساعتی کار می‌کنند؛ گزارش کامل هر روز می‌آید.\n"
+    "• 🏆 رتبه‌بندی را می‌توانی بر اساس جمعیت، مساحت یا اقتصاد مرتب کنی.\n"
 )
 
 # ---------------------------------------------------------------- registration wizard
@@ -576,11 +578,12 @@ def finance_text(c: dict) -> str:
     cons_f = int(c["population"] * 0.010)
     cons_w = int(c["population"] * 0.008)
     cons_e = int(c["population"] * 0.005 + sum(b.values()) * 60)
-    mig_in_total = sum(m["amount"] for m in c.get("mig_in_today", []))
+    mig_in_total = sum(m["amount"] for m in c.get("last_mig_in", c.get("mig_in_today", [])))
     lines += ["", f"🍽️ مصرف روزانه: غذا {cons_f:,} | آب {cons_w:,} | انرژی {cons_e:,}",
               f"👥 جمعیت: {c['population']:,} / ظرفیت زمین {cap:,} ({c['population'] / max(1, cap) * 100:.0f}٪ پر)",
               f"📈 تغییر جمعیت دیروز: {c.get('last_pop_delta', 0):+,} نفر",
-              f"🧳 مهاجرت دیروز: بی‌کشور +{c.get('last_mig_pool', 0):,} | از کشورها +{mig_in_total:,} | خروج −{c.get('mig_out_today', 0):,}"]
+              f"👶 تولد دیروز: +{c.get('last_births', 0):,} | ⚰️ مرگ‌ومیر دیروز: −{c.get('last_deaths', 0):,}",
+              f"🧳 مهاجرت دیروز: بی‌کشور +{c.get('last_mig_pool', 0):,} | از کشورها +{mig_in_total:,} | خروج −{c.get('last_mig_out', c.get('mig_out_today', 0)):,}"]
     return "\n".join(lines)
 
 @dp.message(F.text == "💰 درآمد و مالی")
@@ -979,14 +982,43 @@ async def war_op(cb: types.CallbackQuery):
     await cb.answer()
 
 # ---------------------------------------------------------------- leaderboard / guide / admin
+LB_MODES = {"pop": ("population", "👥 جمعیت"), "area": ("area", "🗺️ مساحت"), "money": ("money", "💰 اقتصاد")}
+
+def lb_kb(mode: str):
+    kb = InlineKeyboardBuilder()
+    for key, (_, label) in LB_MODES.items():
+        kb.button(text=("✅ " if key == mode else "") + label, callback_data=f"lb:{key}")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(3, 1)
+    return kb.as_markup()
+
+async def leaderboard_text(mode: str) -> str:
+    field, label = LB_MODES[mode]
+    lines = [f"🏆 رتبه‌بندی جهانی (بر اساس {label}):\n"]
+    for i, c in enumerate(await dbm.top_countries(field, 10), 1):
+        if mode == "pop":
+            val = f"👥 {c['population']:,} نفر | 🗺️ {c['area']:,}"
+        elif mode == "area":
+            val = f"🗺️ {c['area']:,} کیلومتر مربع | 👥 {c['population']:,}"
+        else:
+            net = c.get("last_fin", {}).get("net_tick", 0)
+            val = f"💰 خزانه {c['money']:,} | خالص روزانه {net:+,}"
+        lines.append(f"{i}. «{c['name']}» — {val}")
+    return "\n".join(lines)
+
 @dp.message(F.text == "🏆 رتبه‌بندی")
 @dp.message(Command("top"))
 async def cmd_top(msg: types.Message):
     if not await gate(msg): return
-    lines = ["🏆 رتبه‌بندی جهانی (بر اساس مساحت):\n"]
-    for i, c in enumerate(await dbm.top_countries("area", 10), 1):
-        lines.append(f"{i}. «{c['name']}» — 🗺️ {c['area']:,} | 👥 {c['population']:,} | 🪖 {logic.military_power(c):,}")
-    await msg.answer("\n".join(lines))
+    await msg.answer(await leaderboard_text("pop"), reply_markup=lb_kb("pop"))
+
+@dp.callback_query(F.data.startswith("lb:"))
+async def lb_cb(cb: types.CallbackQuery):
+    mode = cb.data.split(":")[1]
+    if mode not in LB_MODES:
+        return
+    await cb.message.edit_text(await leaderboard_text(mode), reply_markup=lb_kb(mode))
+    await cb.answer()
 
 @dp.message(F.text == "❓ راهنما")
 @dp.message(F.text == "✖️ بستن منو")
@@ -1051,32 +1083,37 @@ async def run_tick() -> dict:
             c["researching"] = None
             stats["research_done"] += 1; changed = True
             await notify(c["user_id"], f"🔬 تحقیق «{RESEARCH[rid]['fa']}» کامل شد! اثر آن از حالا فعال است.")
-        # hourly economy slice (1/24 of a day): production and income flow hourly
-        if t - c.get("last_econ_ts", c.get("last_daily_ts", t)) >= 3600:
-            logic.econ_tick(c, 1 / 24)
-            c["last_econ_ts"] = t; changed = True
-        # daily economy tick
-        if t - c.get("last_daily_ts", t) >= logic.DAY:
-            rep = logic.daily_tick(c, t)
-            c["last_econ_ts"] = t
-            stats["daily"] += 1; changed = True
-            await notify(c["user_id"], "📅 گزارش روزانه کشورت:\n" + "\n".join(rep["report"]))
-            if rep["collapsed"]:
+        # hourly living-sim slice: economy, births/deaths, happiness, RP, pool migration
+        last_h = c.get("last_hour_ts", c.get("last_econ_ts", c.get("last_daily_ts", t)))
+        if t - last_h >= 3600:
+            hours = min(48, (t - last_h) // 3600)
+            res_h = logic.hourly_tick(c, t, hours)
+            c["last_hour_ts"] = last_h + hours * 3600
+            c["last_econ_ts"] = c["last_hour_ts"]
+            changed = True
+            if res_h["collapsed"]:
                 c["alive"] = False
                 stats["collapsed"] += 1
                 await notify(c["user_id"], "💥 کشور تو به دلیل اعتراض‌های پی‌درپی و رضایت بسیار پایین فروپاشید! با /start یک کشور تازه بساز.")
+        # daily snapshot & report (the living simulation itself is hourly now)
+        if c.get("alive", True) and t - c.get("last_daily_ts", t) >= logic.DAY:
+            rep = logic.daily_tick(c, t)
+            stats["daily"] += 1; changed = True
+            await notify(c["user_id"], "📅 گزارش روزانه کشورت:\n" + "\n".join(rep["report"]))
         if changed:
             await dbm.save_country(c)
-    # cross-country migration (DAILY-GATED BUGFIX 2026-10-22): plan_migration's
-    # amounts are per-day rates (0.2%/day, cap 3000/day), but run_tick fires
-    # every minute. Without this gate an unhappy country bled population every
-    # minute and both players got spammed with migration notifications.
+    # cross-country migration (HOURLY since the hourly-sim round; before that a
+    # DAILY gate fixed the bug where per-day rates ran on every 1-minute tick).
+    # Amounts scale with elapsed hours via frac; totals surface in the daily
+    # report and finance view instead of a notification per move.
     try:
         meta = await dbm.db.meta.find_one({"_id": "migration"})
-        if t - (meta.get("ts", 0) if meta else 0) >= logic.DAY:
+        mig_ts = meta.get("ts", 0) if meta else 0
+        if t - mig_ts >= 3600:
+            mig_hours = min(48, (t - mig_ts) // 3600)
             all_c = [doc async for doc in dbm.db.countries.find({"alive": True, "frozen": {"$ne": True}})]
             by_id = {d["user_id"]: d for d in all_c}
-            for src_id, dst_id, amount in logic.plan_migration(all_c):
+            for src_id, dst_id, amount in logic.plan_migration(all_c, frac=mig_hours / 24):
                 src_c, dst_c = by_id[src_id], by_id[dst_id]
                 src_c["population"] = max(10000, src_c["population"] - amount)
                 logic.adjust_cities(src_c, -amount)
@@ -1086,9 +1123,7 @@ async def run_tick() -> dict:
                 dst_c.setdefault("mig_in_today", []).append({"from": src_c["name"], "amount": amount})
                 await dbm.save_country(src_c); await dbm.save_country(dst_c)
                 stats["migrants"] += amount
-                await notify(dst_id, f"🧳 {amount:,} مهاجر از کشور «{src_c['name']}» (رضایت پایین) به کشورت آمدند.")
-                await notify(src_id, f"🧳 {amount:,} نفر از مردم کشورت به «{dst_c['name']}» مهاجرت کردند. رضایت مردم را بالا ببر تا مهاجرت متوقف شود.")
-            await dbm.db.meta.update_one({"_id": "migration"}, {"$set": {"ts": t}}, upsert=True)
+            await dbm.db.meta.update_one({"_id": "migration"}, {"$set": {"ts": mig_ts + mig_hours * 3600}}, upsert=True)
     except Exception:
         log.exception("migration phase failed")
     # wars whose 3 days are over

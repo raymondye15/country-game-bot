@@ -68,6 +68,9 @@ def new_country(user_id: int, planet: str, continent: str, government: str,
         "mines": mines,
         "buildings": {"farm": 3, "waterplant": 3, "powerplant": 1, "mine": 1, "factory": 1, "university": 0, "hospital": 0, "barracks": 0},
         "soldiers": 0, "accept_migrants": True, "fin_trade": 0, "last_fin": {}, "fin_day": {}, "carry": {},
+        "day_births": 0, "day_deaths": 0, "day_pool": 0, "day_rp": 0,
+        "last_births": 0, "last_deaths": 0, "last_mig_in": [], "last_mig_out": 0,
+        "protest_hours": 0, "shortage_hours": 0,
         "mig_in_today": [], "mig_out_today": 0, "last_mig_pool": 0, "last_pop_delta": 0,
         "happiness": 65, "tax_rate": 2,  # 1=low 2=mid 3=high
         "neighbors": [], "alliances": [], "naps": [],
@@ -76,7 +79,7 @@ def new_country(user_id: int, planet: str, continent: str, government: str,
         "researched": [], "researching": None,  # {id, finish_ts}
         "created_ts": t, "last_daily_ts": t, "last_seen_ts": t,
         "protest_days": 0, "shortage_days": 0, "war_id": None, "peace_until": 0, "newbie_until": t + 7 * DAY,
-        "last_econ_ts": t,
+        "last_econ_ts": t, "last_hour_ts": t,
         "alive": True, "frozen": False,
     }
     c["mods_cache"] = compute_mods(c)
@@ -197,8 +200,9 @@ def adjust_cities(c: dict, delta: int):
     for city in c["cities"]:
         city["pop"] = max(1000, int(city["pop"] + delta * city["pop"] / total))
 
-def plan_migration(countries: list) -> list:
+def plan_migration(countries: list, frac: float = 1.0) -> list:
     """Unhappy populations move to the happiest reachable country.
+    frac scales the per-day rates (frac=1/24 = one hourly slice).
     Reachable = same planet, unless the DESTINATION has an interplanetary airport.
     Returns [(src_user_id, dst_user_id, amount)]."""
     moves = []
@@ -216,8 +220,8 @@ def plan_migration(countries: list) -> list:
             continue
         dst = max(reachable, key=lambda d: d["happiness"])
         headroom = int(capacity(dst) * 1.05 - dst["population"])
-        amount = min(int(src_c["population"] * 0.002), 3000, headroom)
-        if amount >= 100:
+        amount = min(int(src_c["population"] * 0.002 * frac), int(3000 * frac), headroom)
+        if amount >= max(1, int(100 * frac)):
             moves.append((src_c["user_id"], dst["user_id"], amount))
     return moves
 
@@ -256,14 +260,89 @@ def econ_tick(c: dict, frac: float = 1.0):
     fd["upkeep_army"] = fd.get("upkeep_army", 0.0) + ua * frac
     fd["civic"] = fd.get("civic", 0.0) + civic * frac
 
-def daily_tick(c: dict, t: int = None) -> dict:
-    """One in-game day of economy. Returns report lines + notifications."""
+def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
+    """One hourly slice of the living simulation (daily_tick only snapshots and
+    reports): economy 1/24 per hour, births & deaths, happiness drift, research
+    points, countryless-pool migration, protest/collapse counters in hours.
+    Fractional amounts ride in c['carry'] so 24 slices == 1 day."""
     t = t or now_ts()
     b = c["buildings"]
-    report = []
-    econ_tick(c, 1.0)
+    carry = c.setdefault("carry", {})
+    econ_tick(c, hours / 24)
     shortage = any(c["res"][r] <= 0 for r in ("food", "water", "energy"))
-    # snapshot the accumulated day totals (hourly slices + this full-day call)
+    if shortage:
+        c["shortage_hours"] = c.get("shortage_hours", 0) + hours
+    else:
+        c["shortage_hours"] = 0
+    c["shortage_days"] = c.get("shortage_hours", 0) // 24
+    # research points: hourly share of the daily 2 + 6 per university
+    rp_f = carry.get("rp", 0.0) + (2 + b.get("university", 0) * 6) * hours / 24
+    rp_add = int(rp_f); carry["rp"] = rp_f - rp_add
+    c["rp"] += rp_add
+    c["day_rp"] = c.get("day_rp", 0) + rp_add
+    # happiness: drift toward the target (the old daily step moved halfway/day)
+    h_target = 55 + mod(c, "happiness") + b.get("hospital", 0) * 2 + b.get("university", 0)
+    h_target -= {1: -4, 2: 0, 3: 9}[c["tax_rate"]]
+    if shortage:
+        # consecutive shortage hurts more and more (scaled from days to hours)
+        h_target -= 25 + min(20, 5 * (c.get("shortage_hours", 0) / 24))
+    if c["money"] < 0:
+        h_target -= 10
+        c["money"] = max(c["money"], -500)
+    step = 1 - 0.5 ** (1 / 24)
+    for _ in range(hours):
+        c["happiness"] = c["happiness"] + (h_target - c["happiness"]) * step
+    c["happiness"] = max(0.0, min(100.0, c["happiness"]))
+    # ---- births & deaths ----
+    hosp = b.get("hospital", 0)
+    births_rate = (0.0050 * (0.8 + c["happiness"] / 100 * 0.45) + hosp * 0.0002) * (1 + mod(c, "pop_growth"))
+    deaths_rate = 0.0024 * (1.35 - c["happiness"] / 100 * 0.55) * (1 - min(0.4, hosp * 0.06))
+    if shortage:
+        births_rate *= 0.55
+        deaths_rate *= 2.3
+    if c.get("war_id"):
+        deaths_rate += 0.0004
+    ratio = c["population"] / max(1, capacity(c))
+    damp = max(0.0, 1 - (ratio - 0.8) / 0.4) if ratio > 0.8 else 1.0
+    bf = carry.get("births", 0.0) + c["population"] * births_rate * damp * hours / 24
+    births = int(bf); carry["births"] = bf - births
+    df = carry.get("deaths", 0.0) + c["population"] * deaths_rate * hours / 24
+    deaths = int(df); carry["deaths"] = df - deaths
+    old_pop = c["population"]
+    new_pop = old_pop + births - deaths
+    if new_pop < 10000:
+        deaths -= (10000 - new_pop)
+        new_pop = 10000
+    c["population"] = new_pop
+    adjust_cities(c, new_pop - old_pop)
+    c["day_births"] = c.get("day_births", 0) + births
+    c["day_deaths"] = c.get("day_deaths", 0) + deaths
+    # countryless pool migration (hourly share of the daily rate)
+    if c.get("accept_migrants", True) and c["happiness"] >= 55 and not shortage and not c.get("war_id"):
+        attract = 0.5 + (c["happiness"] - 55) / 45.0 + {1: 0.3, 2: 0.0, 3: -0.3}[c["tax_rate"]]
+        headroom = int(capacity(c) * 1.1 - c["population"])
+        if attract > 0 and headroom > 0:
+            mig = min(int(c["population"] * 0.0015 * attract * hours / 24), headroom)
+            if mig > 0:
+                c["population"] += mig
+                adjust_cities(c, mig)
+                c["day_pool"] = c.get("day_pool", 0) + mig
+    # protests & collapse (hour counters; collapse needs ~3+ days under 15%)
+    stability = 1 - mod(c, "stability")
+    if c["happiness"] < 30:
+        c["protest_hours"] = c.get("protest_hours", 0) + hours
+    else:
+        c["protest_hours"] = max(0, c.get("protest_hours", 0) - hours)
+    c["protest_days"] = c.get("protest_hours", 0) // 24
+    collapsed = c["happiness"] < 15 and c.get("protest_hours", 0) >= (int(3 * stability) + 1) * 24
+    return {"collapsed": collapsed, "shortage": shortage}
+
+def daily_tick(c: dict, t: int = None) -> dict:
+    """Daily snapshot & report only. The living simulation (economy, births and
+    deaths, happiness, RP, migration) runs hourly in hourly_tick; this snapshots
+    the accumulated day totals, rolls a random event and builds the report."""
+    t = t or now_ts()
+    report = []
     fd = c.get("fin_day", {})
     trade_in = c.get("fin_trade", 0)
     c["fin_trade"] = 0
@@ -275,62 +354,25 @@ def daily_tick(c: dict, t: int = None) -> dict:
                      "upkeep_buildings": upkeep_buildings, "upkeep_army": upkeep_army,
                      "civic": civic, "net_tick": income + factory_income - upkeep}
     c["fin_day"] = {}
-    # research points
-    rp_gain = 2 + b.get("university", 0) * 6
-    c["rp"] += rp_gain
-    # happiness
-    h = 55 + mod(c, "happiness") + b.get("hospital", 0) * 2 + b.get("university", 0)
-    h -= {1: -4, 2: 0, 3: 9}[c["tax_rate"]]
-    if shortage:
-        # consecutive shortage days hurt more and more (BUGFIX: flat -18 could never
-        # push happiness below the protest threshold, so collapse was unreachable)
-        c["shortage_days"] = c.get("shortage_days", 0) + 1
-        h -= 25 + min(20, 5 * c["shortage_days"])
-    else:
-        c["shortage_days"] = 0
-    if c["money"] < 0:
-        h -= 10
-        c["money"] = max(c["money"], -500)
-    c["happiness"] = max(0, min(100, int(c["happiness"] * 0.5 + h * 0.5)))
-    # population growth & city growth
-    growth = 0.004 + (c["happiness"] - 50) / 20000.0 + mod(c, "pop_growth") * 0.002 + b.get("hospital", 0) * 0.0005
-    if shortage:
-        growth -= 0.004
-    if growth > 0:
-        ratio = c["population"] / max(1, capacity(c))
-        if ratio > 0.8:  # land gets crowded: growth fades out toward capacity
-            growth *= max(0.0, 1 - (ratio - 0.8) / 0.4)
-    old_pop = c["population"]
-    c["population"] = max(10000, int(c["population"] * (1 + growth)))
-    ratio = c["population"] / max(1, old_pop)
-    for city in c["cities"]:
-        city["pop"] = int(city["pop"] * ratio)
-    # immigrants without a country arrive daily (same-planet pool; the default
-    # international airport makes every country reachable for them)
-    c["mig_in_today"] = []
-    c["mig_out_today"] = 0
-    mig_pool = 0
-    if c.get("accept_migrants", True) and c["happiness"] >= 55 and not shortage and not c.get("war_id"):
-        attract = 0.5 + (c["happiness"] - 55) / 45.0 + {1: 0.3, 2: 0.0, 3: -0.3}[c["tax_rate"]]
-        headroom = int(capacity(c) * 1.1 - c["population"])
-        if attract > 0 and headroom > 0:
-            mig_pool = min(int(c["population"] * 0.0015 * attract), headroom)
-            if mig_pool > 0:
-                c["population"] += mig_pool
-                adjust_cities(c, mig_pool)
-                report.append(f"🧳 مهاجران بی‌کشور: +{mig_pool:,} نفر وارد کشورت شدند.")
-    c["last_mig_pool"] = mig_pool
-    c["last_pop_delta"] = c["population"] - old_pop
-    # protests / collapse
-    collapsed = False
-    stability = 1 - mod(c, "stability")
+    rp_gain = c.get("day_rp", 0); c["day_rp"] = 0
+    # demographics & migration snapshots (accumulated by the hourly slices)
+    births = c.get("day_births", 0); deaths = c.get("day_deaths", 0)
+    c["last_births"] = births; c["last_deaths"] = deaths
+    c["day_births"] = 0; c["day_deaths"] = 0
+    pool = c.get("day_pool", 0); c["last_mig_pool"] = pool; c["day_pool"] = 0
+    mig_in = c.get("mig_in_today", []); mig_out = c.get("mig_out_today", 0)
+    c["last_mig_in"] = mig_in; c["last_mig_out"] = mig_out
+    c["mig_in_today"] = []; c["mig_out_today"] = 0
+    mig_in_total = sum(m["amount"] for m in mig_in)
+    c["last_pop_delta"] = births - deaths + pool + mig_in_total - mig_out
+    if pool > 0:
+        report.append(f"🧳 مهاجران بی‌کشور: +{pool:,} نفر وارد کشورت شدند.")
+    if mig_in_total > 0:
+        report.append(f"🧳 مهاجران از کشورهای دیگر: +{mig_in_total:,} نفر به کشورت آمدند.")
+    if mig_out > 0:
+        report.append(f"🧳 مهاجرت خروجی: −{mig_out:,} نفر کشورت را ترک کردند.")
     if c["happiness"] < 30:
-        c["protest_days"] += 1
-        report.append(f"⚠️ اعتراض در کشور! رضایت مردم {c['happiness']}٪ است (روز {c['protest_days']} اعتراض). مالیات را کم کن، غذا/آب/انرژی را تأمین کن یا ساختمان رفاهی بساز.")
-    else:
-        c["protest_days"] = max(0, c["protest_days"] - 1)
-    if c["happiness"] < 15 and c["protest_days"] >= int(3 * stability) + 1:
-        collapsed = True
+        report.append(f"⚠️ اعتراض در کشور! رضایت مردم {int(c['happiness'])}٪ است ({c.get('protest_days', 0)} روز اعتراض). مالیات را کم کن، غذا/آب/انرژی را تأمین کن یا ساختمان رفاهی بساز.")
     # random event (12%)
     event = None
     if random.random() < 0.12:
@@ -347,7 +389,8 @@ def daily_tick(c: dict, t: int = None) -> dict:
         report.append(f"{event['fa']}: {event['text']}")
     c["last_daily_ts"] = t
     report.append(f"📊 گزارش روزانه: درآمد {income + factory_income:,}، هزینه نگهداری {upkeep:,}، امتیاز تحقیق +{rp_gain}، جمعیت {c['population']:,}")
-    return {"report": report, "collapsed": collapsed, "event": event}
+    report.append(f"👶 تولد: +{births:,} | ⚰️ مرگ‌ومیر: −{deaths:,} | خالص جمعیت: {births - deaths:+,}")
+    return {"report": report, "collapsed": False, "event": event}
 
 def resolve_war(war: dict, attacker: dict, defender: dict) -> dict:
     """Mutates both countries. Returns outcome dict."""
@@ -404,8 +447,9 @@ def country_text(c: dict) -> str:
         f"🪐 سیاره: {p['name']} ({p['fa']}) | قاره: {p['continents'][c['continent']]['name']}",
         f"🏛️ حکومت: {GOVERNMENTS[c['government']]['fa']}",
         f"👥 جمعیت: {c['population']:,} | 🗺️ مساحت: {c['area']:,} کیلومتر مربع",
-        f"😊 رضایت مردم: {c['happiness']}٪ | 💰 خزانه: {c['money']:,} | 🔬 امتیاز تحقیق: {c['rp']}",
+        f"😊 رضایت مردم: {int(round(c['happiness']))}٪ | 💰 خزانه: {c['money']:,} | 🔬 امتیاز تحقیق: {c['rp']}",
         f"🔭 شارژ اکتشاف: {c['explore_charges']}/{int(mods.get('explore_cap', 3))}",
+        f"👶 تولد دیروز: +{c.get('last_births', 0):,} | ⚰️ مرگ‌ومیر دیروز: −{c.get('last_deaths', 0):,}",
         f"🪖 سرباز: {c['soldiers']:,} (قدرت نظامی: {military_power(c):,})",
         "",
         "🏙️ شهرهای بزرگ:",
