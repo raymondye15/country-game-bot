@@ -74,7 +74,7 @@ def new_country(user_id: int, planet: str, continent: str, government: str,
         "explore_charges": 3, "last_charge_ts": t,
         "researched": [], "researching": None,  # {id, finish_ts}
         "created_ts": t, "last_daily_ts": t, "last_seen_ts": t,
-        "protest_days": 0, "war_id": None, "newbie_until": t + 7 * DAY,
+        "protest_days": 0, "shortage_days": 0, "war_id": None, "newbie_until": t + 7 * DAY,
         "alive": True, "frozen": False,
     }
     c["mods_cache"] = compute_mods(c)
@@ -184,7 +184,12 @@ def daily_tick(c: dict, t: int = None) -> dict:
     h = 55 + mod(c, "happiness") + b.get("hospital", 0) * 2 + b.get("university", 0)
     h -= {1: -4, 2: 0, 3: 9}[c["tax_rate"]]
     if shortage:
-        h -= 18
+        # consecutive shortage days hurt more and more (BUGFIX: flat -18 could never
+        # push happiness below the protest threshold, so collapse was unreachable)
+        c["shortage_days"] = c.get("shortage_days", 0) + 1
+        h -= 25 + min(20, 5 * c["shortage_days"])
+    else:
+        c["shortage_days"] = 0
     if c["money"] < 0:
         h -= 10
         c["money"] = max(c["money"], -500)

@@ -6,14 +6,14 @@ Stack: aiogram 3 + MongoDB Atlas (free) + Render web service (webhook)
 Env: BOT_TOKEN, MONGODB_URI, MONGODB_DB, WEBHOOK_BASE_URL (or RENDER_EXTERNAL_URL),
      TICK_SECRET, ADMIN_ID (optional), PORT
 """
-import os, re, time, asyncio, logging
+import os, re, asyncio, logging, hashlib
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db as dbm
@@ -65,7 +65,14 @@ async def my_country(msg_or_cb) -> dict | None:
         else:
             await msg_or_cb.answer(text)
         return None
-    c["last_seen_ts"] = logic.now_ts()
+    # BUGFIX: activity must be persisted (the minute-tick freezes countries whose
+    # last_seen is 14 days old) and an active player must be un-frozen. Throttled
+    # to one small atomic write per hour so viewing menus stays cheap.
+    t = logic.now_ts()
+    if t - c.get("last_seen_ts", 0) > 3600 or c.get("frozen"):
+        c["last_seen_ts"] = t
+        c["frozen"] = False
+        await dbm.db.countries.update_one({"user_id": uid}, {"$set": {"last_seen_ts": t, "frozen": False}})
     return c
 
 GUIDE_TEXT = (
@@ -196,7 +203,14 @@ async def reg_city3(msg: types.Message, state: FSMContext):
     c = logic.new_country(msg.from_user.id, data["planet"], data["continent"], data["government"],
                            data["cname"], data["capital"], [data["city1"], data["city2"], msg.text.strip()],
                            msg.from_user.username or "")
-    await dbm.save_country(c)
+    try:
+        await dbm.save_country(c)
+    except Exception:
+        # BUGFIX: two players finishing registration with the same country name at
+        # the same moment hit the unique index; the loser used to get silence.
+        await state.clear()
+        await msg.answer("❌ متأسفانه همین لحظه بازیکن دیگری همین اسم کشور را ثبت کرد. با /start دوباره شروع کن و اسم دیگری انتخاب کن.")
+        return
     await state.clear()
     others = await dbm.continent_countries(c["planet"], c["continent"], c["user_id"])
     hint = ("\n\nکشورهای هم‌قاره‌ای تو: " + "، ".join(o["name"] for o in others[:5]) +
@@ -561,6 +575,14 @@ async def req_accept(cb: types.CallbackQuery):
     other = await dbm.get_country(fid)
     if not me or not other or not await dbm.pop_request(kind, fid, cb.from_user.id):
         await cb.answer("این درخواست دیگر معتبر نیست.", show_alert=True); return
+    # BUGFIX: re-check the 4-neighbour cap at accept time (it was only checked when
+    # the request was sent, so queued requests could push a country past 4).
+    if kind == "neighbor":
+        if fid in me["neighbors"]:
+            await cb.message.edit_text("شما همین حالا هم همسایه‌اید."); await cb.answer(); return
+        if len(me["neighbors"]) >= 4 or len(other["neighbors"]) >= 4:
+            await cb.message.edit_text("❌ یکی از دو کشور سقف ۴ همسایه را پر کرده است؛ درخواست قبول نشد.")
+            await cb.answer(); return
     field = {"neighbor": "neighbors", "alliance": "alliances", "nap": "naps"}[kind]
     for a, b in ((me, other), (other, me)):
         if b["user_id"] not in a[field]:
@@ -741,6 +763,16 @@ async def run_tick() -> dict:
         await dbm.db.wars.delete_one({"_id": war["_id"]})
         if not attacker or not defender:
             continue
+        # BUGFIX: if one side collapsed mid-war its country is dead; resolving the
+        # war against it produced nonsense outcomes. Cancel the war instead.
+        if not attacker.get("alive", True) or not defender.get("alive", True):
+            for side in (attacker, defender):
+                if side.get("alive", True) and side.get("war_id") is not None:
+                    side["war_id"] = None
+                    await dbm.save_country(side)
+                    await notify(side["user_id"], "⚔️ جنگ شما به دلیل فروپاشی یکی از طرفین لغو شد.")
+            stats["wars_resolved"] += 1
+            continue
         outcome = logic.resolve_war(war, attacker, defender)
         stats["wars_resolved"] += 1
         if outcome["result"] == "annex":
@@ -793,9 +825,13 @@ async def main():
     app.router.add_post("/tick", handle_tick)
     port = int(os.environ.get("PORT", "8080"))
     if base:
-        app.router.add_post("/webhook", handle_webhook)
-        await bot.set_webhook(base.rstrip("/") + "/webhook")
-        log.info("webhook set to %s/webhook", base)
+        # SECURITY FIX: the webhook path carries a hash of the bot token, so the
+        # endpoint is not guessable — previously anyone could POST fake Telegram
+        # updates (fake users/messages) to the plain /webhook path.
+        webhook_path = "/webhook/" + hashlib.sha256(BOT_TOKEN.encode()).hexdigest()[:32]
+        app.router.add_post(webhook_path, handle_webhook)
+        await bot.set_webhook(base.rstrip("/") + webhook_path)
+        log.info("webhook set (secret path)")
         runner = web.AppRunner(app)
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", port).start()
