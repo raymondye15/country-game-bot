@@ -14,7 +14,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.mongo import MongoStorage
 from motor.motor_asyncio import AsyncIOMotorClient
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, BotCommand
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db as dbm
@@ -43,6 +43,18 @@ async def gate(msg: types.Message) -> bool:
     """Group gate removed by the owner's request (2026-10-22): the game works in
     any group immediately, with no minimum-member condition."""
     return True
+
+@dp.callback_query(F.data == "close")
+async def close_message(cb: types.CallbackQuery):
+    """Universal close button: removes the bot's menu message."""
+    try:
+        await cb.message.delete()
+    except Exception:
+        try:
+            await cb.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+    await cb.answer()
 
 def main_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[
@@ -82,7 +94,7 @@ GUIDE_TEXT = (
     "• 😊 اگر رضایت زیر ۳۰٪ بیاید اعتراض شروع می‌شود؛ اگر زیر ۱۵٪ بماند کشور فرو می‌پاشد و باید از اول بسازی. (کشتن مردم ممکن نیست!)\n"
     "• ⚔️ جنگ ۳ روز واقعی طول می‌کشد و همزمان فقط یک جنگ می‌توانی داشته باشی. جنگ فقط با کشورهای هم‌سیاره ممکن است و بعد از هر جنگ، هر دو طرف ۳ روز آتش‌بس دارند. پیروزی کامل = تصرف کل کشور حریف؛ پیروزی جزئی = ۲۵٪ خاک و معادنش.\n"
     "• 🤝 همسایه شدن (۱ تا ۴ کشور) تجارت و لجستیک را ارزان و سریع می‌کند.\n"
-    "• 🛒 بازار جهانی برای همه بازیکن‌هاست، حتی خارج از گروه تو. پیشنهادهای فروش بعد از ۷ روز منقضی می‌شوند و منابع فروش‌نرفته به انبارت برمی‌گردند."
+    "• 🛒 بازار جهانی برای همه بازیکن‌هاست، حتی خارج از گروه تو. پیشنهادهای فروش بعد از ۷ روز منقضی می‌شوند و منابع فروش‌نرفته به انبارت برمی‌گردند. در گروه، برای ترید مستقیم با یک بازیکن روی پیامش ریپلای بزن و بنویس «ترید»."
 )
 
 # ---------------------------------------------------------------- registration wizard
@@ -244,6 +256,7 @@ async def cmd_country(msg: types.Message):
     kb.button(text="⚙️ تنظیم مالیات", callback_data="tax:menu")
     kb.button(text="🔭 اکتشاف", callback_data="explore:menu")
     kb.adjust(2)
+    kb.button(text="✖️ بستن", callback_data="close")
     await msg.answer(logic.country_text(c), reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data == "tax:menu")
@@ -255,6 +268,7 @@ async def tax_menu(cb: types.CallbackQuery):
         mark = "✅ " if c["tax_rate"] == rate else ""
         kb.button(text=mark + label, callback_data=f"tax:set:{rate}")
     kb.adjust(1)
+    kb.button(text="✖️ بستن", callback_data="close")
     await cb.message.answer(f"مالیات فعلی: {c['tax_rate']}", reply_markup=kb.as_markup()); await cb.answer()
 
 @dp.callback_query(F.data.startswith("tax:set:"))
@@ -285,6 +299,7 @@ async def send_explore_menu(msg: types.Message, c: dict):
     if c["explore_charges"] < cap:
         left = max(0, logic.HOUR - (logic.now_ts() - c["last_charge_ts"]))
         nxt = f"\nشارژ بعدی: {left // 60} دقیقه دیگر"
+    kb.button(text="✖️ بستن", callback_data="close")
     await msg.answer(f"🔭 شارژ اکتشاف: {c['explore_charges']}/{cap}{nxt}\nهزینه هر اکتشاف: ⚡۱۵ 💧غذا ۲۰ 💰۲۵\nجهت اکتشاف را انتخاب کن:", reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data == "explore:menu")
@@ -321,6 +336,7 @@ async def cmd_build(msg: types.Message):
         lines.append(f"{b['fa']} — سطح {c['buildings'].get(bid, 0)} ({b['desc']})\nهزینه ساخت: {cost}")
         kb.button(text=f"ساخت {b['fa']}", callback_data=f"build:{bid}")
     kb.adjust(1)
+    kb.button(text="✖️ بستن", callback_data="close")
     await msg.answer("\n".join(lines), reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data.startswith("build:"))
@@ -376,6 +392,7 @@ async def cmd_research(msg: types.Message):
                 lines.append(f"• {r['fa']} — {r['desc']} | هزینه {r['cost']} امتیاز{mc_txt}، {r['hours']} ساعت")
                 kb.button(text=f"تحقیق: {r['fa']}", callback_data=f"research:start:{rid}")
     kb.adjust(1)
+    kb.button(text="✖️ بستن", callback_data="close")
     await msg.answer("\n".join(lines), reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data.startswith("research:start:"))
@@ -416,7 +433,8 @@ async def cmd_trade(msg: types.Message):
     kb.button(text="➕ ثبت پیشنهاد فروش", callback_data="trade:new")
     kb.adjust(1)
     fee_note = "کارمزد بازار: ۵٪ (با همسایه‌ها: بدون کارمزد در معامله مستقیم از پروفایل کشور)"
-    await msg.answer(f"🛒 تجارت جهانی — حتی با بازیکن‌های خارج از گروه تو.\n{fee_note}", reply_markup=kb.as_markup())
+    kb.button(text="✖️ بستن", callback_data="close")
+    await msg.answer(f"🛒 تجارت جهانی — حتی با بازیکن‌های خارج از گروه تو.\n{fee_note}\n💱 ترید مستقیم در گروه: روی پیام بازیکن ریپلای بزن و بنویس «ترید».", reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data == "trade:list")
 async def trade_list(cb: types.CallbackQuery):
@@ -433,6 +451,7 @@ async def trade_list(cb: types.CallbackQuery):
         lines.append(f"• {RESOURCES[o['resource']]} × {o['amount']:,} — قیمت {o['price']:,} 💰 (فروشنده: {sname})")
         kb.button(text=f"خرید از {sname} ({o['price']:,}💰)", callback_data=f"trade:buy:{o['_id']}")
     kb.adjust(1)
+    kb.button(text="✖️ بستن", callback_data="close")
     await cb.message.answer("\n".join(lines), reply_markup=kb.as_markup()); await cb.answer()
 
 @dp.callback_query(F.data.startswith("trade:buy:"))
@@ -475,6 +494,7 @@ async def trade_new(cb: types.CallbackQuery, state: FSMContext):
         kb.button(text=f"{label} (موجودی: {c['res'].get(r, 0):,})", callback_data=f"trade:res:{r}")
     kb.adjust(1)
     await state.set_state(Trade.resource)
+    kb.button(text="✖️ بستن", callback_data="close")
     await cb.message.answer("کدام منبع را می‌فروشی؟", reply_markup=kb.as_markup()); await cb.answer()
 
 @dp.callback_query(F.data.startswith("trade:res:"), Trade.resource)
@@ -513,6 +533,134 @@ async def trade_price(msg: types.Message, state: FSMContext):
     await dbm.db.trade_offers.insert_one({"seller_id": c["user_id"], "resource": data["resource"], "amount": data["amount"], "price": price, "ts": logic.now_ts()})
     await state.clear()
     await msg.answer(f"✅ پیشنهاد فروش ثبت شد: {RESOURCES[data['resource']]} × {data['amount']:,} به قیمت {price:,} 💰 — در بازار جهانی برای همه قابل خرید است.")
+
+# ------------------------------------------------- direct group trade (reply-based)
+class DT(StatesGroup):
+    resource = State(); amount = State(); price = State()
+
+@dp.message(F.reply_to_message, F.text.in_({"ترید", "/trade"}), F.chat.type.in_({"group", "supergroup"}))
+async def dt_start(msg: types.Message, state: FSMContext):
+    target_user = msg.reply_to_message.from_user
+    if not target_user or target_user.is_bot or target_user.id == msg.from_user.id:
+        await msg.answer("برای ترید باید روی پیام یک بازیکن دیگر ریپلای بزنی."); return
+    me = await dbm.get_country(msg.from_user.id)
+    if not me or not me.get("alive", True):
+        await msg.answer("تو هنوز کشوری نداری؛ اول در پیوی ربات با /start کشورت را بساز."); return
+    other = await dbm.get_country(target_user.id)
+    if not other or not other.get("alive", True):
+        await msg.answer("این بازیکن کشوری ندارد."); return
+    if not any(me["res"].get(r, 0) > 0 for r in RESOURCES):
+        await msg.answer("هیچ منبعی برای فروش نداری."); return
+    await state.set_state(DT.resource)
+    await state.update_data(target_id=target_user.id, chat_id=msg.chat.id)
+    kb = InlineKeyboardBuilder()
+    for rkey, rname in RESOURCES.items():
+        if me["res"].get(rkey, 0) > 0:
+            kb.button(text=f"{rname} ({me['res'][rkey]:,})", callback_data=f"dt:res:{rkey}")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(2)
+    await msg.answer(f"💱 ترید با «{other['name']}» — کدام منبع را می‌فروشی؟", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("dt:res:"), DT.resource)
+async def dt_resource(cb: types.CallbackQuery, state: FSMContext):
+    rkey = cb.data.split(":")[2]
+    await state.update_data(resource=rkey)
+    await state.set_state(DT.amount)
+    await cb.message.edit_text(f"💱 {RESOURCES[rkey]} — چه مقدار می‌فروشی؟ (عدد بفرست)")
+    await cb.answer()
+
+@dp.message(DT.amount)
+async def dt_amount(msg: types.Message, state: FSMContext):
+    try:
+        amount = int(msg.text.replace(",", "").strip())
+    except Exception:
+        await msg.answer("فقط عدد بفرست:"); return
+    data = await state.get_data()
+    me = await dbm.get_country(msg.from_user.id)
+    if not me or amount <= 0 or amount > me["res"].get(data.get("resource", ""), 0):
+        await msg.answer("مقدار نامعتبر است یا موجودی کافی نداری. دوباره بفرست:"); return
+    await state.update_data(amount=amount)
+    await state.set_state(DT.price)
+    await msg.answer("قیمت کل (💰) چقدر باشد؟ (عدد بفرست؛ ۰ = هدیه)")
+
+@dp.message(DT.price)
+async def dt_price(msg: types.Message, state: FSMContext):
+    try:
+        price = int(msg.text.replace(",", "").strip())
+    except Exception:
+        await msg.answer("فقط عدد بفرست:"); return
+    if price < 0:
+        await msg.answer("قیمت نمی‌تواند منفی باشد. دوباره بفرست:"); return
+    data = await state.get_data()
+    me = await dbm.get_country(msg.from_user.id)
+    other = await dbm.get_country(data["target_id"])
+    if not me or not other or not other.get("alive", True) or me["res"].get(data["resource"], 0) < data["amount"]:
+        await state.clear()
+        await msg.answer("❌ موجودی یا طرف ترید دیگر معتبر نیست؛ ترید لغو شد."); return
+    me["res"][data["resource"]] -= data["amount"]
+    await dbm.save_country(me)
+    doc = {"seller_id": msg.from_user.id, "buyer_id": data["target_id"], "resource": data["resource"],
+           "amount": data["amount"], "price": price, "chat_id": data["chat_id"], "ts": logic.now_ts(), "status": "pending"}
+    res = await dbm.db.direct_trades.insert_one(doc)
+    await state.clear()
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ قبول ترید", callback_data=f"dt:ok:{res.inserted_id}")
+    kb.button(text="❌ رد", callback_data=f"dt:no:{res.inserted_id}")
+    kb.adjust(2)
+    price_txt = f"{price:,} 💰" if price else "رایگان (هدیه) 🎁"
+    await msg.answer(f"💱 پیشنهاد ترید برای «{other['name']}»:\n{RESOURCES[data['resource']]} × {data['amount']:,} در برابر {price_txt}\nفروشنده: «{me['name']}» — فقط خودِ خریدار می‌تواند قبول یا رد کند. (اعتبار پیشنهاد: ۴۸ ساعت)", reply_markup=kb.as_markup())
+
+async def _dt_load(cb: types.CallbackQuery):
+    from bson import ObjectId
+    try:
+        doc = await dbm.db.direct_trades.find_one({"_id": ObjectId(cb.data.split(":")[2])})
+    except Exception:
+        doc = None
+    if not doc or doc["status"] != "pending":
+        await cb.answer("این پیشنهاد دیگر معتبر نیست.", show_alert=True); return None
+    if cb.from_user.id != doc["buyer_id"]:
+        await cb.answer("این پیشنهاد برای تو نیست.", show_alert=True); return None
+    return doc
+
+@dp.callback_query(F.data.startswith("dt:ok:"))
+async def dt_accept(cb: types.CallbackQuery):
+    doc = await _dt_load(cb)
+    if not doc:
+        return
+    buyer = await dbm.get_country(doc["buyer_id"])
+    seller = await dbm.get_country(doc["seller_id"])
+    if not buyer or not buyer.get("alive", True) or not seller or not seller.get("alive", True):
+        await dbm.db.direct_trades.update_one({"_id": doc["_id"]}, {"$set": {"status": "void"}})
+        if seller and seller.get("alive", True):
+            seller["res"][doc["resource"]] = seller["res"].get(doc["resource"], 0) + doc["amount"]
+            await dbm.save_country(seller)
+        await cb.message.edit_text("❌ ترید لغو شد (یکی از طرفین دیگر کشور فعالی ندارد) و منابع به فروشنده برگشت.")
+        await cb.answer(); return
+    fee = 0 if doc["buyer_id"] in seller["neighbors"] else int(doc["price"] * 0.05)
+    if buyer["money"] < doc["price"]:
+        await cb.answer(f"پول کافی نداری ({buyer['money']:,}/{doc['price']:,} 💰)", show_alert=True); return
+    buyer["money"] -= doc["price"]
+    seller["money"] += doc["price"] - fee
+    buyer["res"][doc["resource"]] = buyer["res"].get(doc["resource"], 0) + doc["amount"]
+    await dbm.save_country(buyer); await dbm.save_country(seller)
+    await dbm.db.direct_trades.update_one({"_id": doc["_id"]}, {"$set": {"status": "done"}})
+    await cb.message.edit_text(f"✅ ترید انجام شد! {RESOURCES[doc['resource']]} × {doc['amount']:,} از «{seller['name']}» به «{buyer['name']}» رسید ({doc['price']:,} 💰).")
+    await notify(doc["seller_id"], f"💱 تریدت با «{buyer['name']}» انجام شد: {RESOURCES[doc['resource']]} × {doc['amount']:,} فروخته شد و {doc['price'] - fee:,} 💰 گرفتی.")
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("dt:no:"))
+async def dt_reject(cb: types.CallbackQuery):
+    doc = await _dt_load(cb)
+    if not doc:
+        return
+    await dbm.db.direct_trades.update_one({"_id": doc["_id"]}, {"$set": {"status": "rejected"}})
+    seller = await dbm.get_country(doc["seller_id"])
+    if seller and seller.get("alive", True):
+        seller["res"][doc["resource"]] = seller["res"].get(doc["resource"], 0) + doc["amount"]
+        await dbm.save_country(seller)
+    await cb.message.edit_text("❌ پیشنهاد ترید رد شد و منابع به فروشنده برگشت.")
+    await notify(doc["seller_id"], "💱 پیشنهاد تریدت رد شد؛ منابع به انبارت برگشت.")
+    await cb.answer()
 
 # ---------------------------------------------------------------- diplomacy
 @dp.message(F.text == "🤝 دیپلماسی")
@@ -556,6 +704,7 @@ async def cmd_find(msg: types.Message):
     if tid not in c.get("naps", []):
         kb.button(text="🕊️ پیمان عدم تجاوز", callback_data=f"req:nap:{tid}")
     kb.button(text="⚔️ اعلان جنگ", callback_data=f"war:declare:{tid}")
+    kb.button(text="✖️ بستن", callback_data="close")
     kb.adjust(1)
     rel = []
     if tid in c["neighbors"]: rel.append("همسایه")
@@ -653,6 +802,7 @@ async def cmd_army(msg: types.Message):
             kb.button(text="💥 عملیات نظامی امروز", callback_data="war:op")
     kb.adjust(1)
     lines.append("\nبرای اعلان جنگ، کشور هدف را با /find پیدا کن.")
+    kb.button(text="✖️ بستن", callback_data="close")
     await msg.answer("\n".join(lines), reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data == "army:recruit")
@@ -737,6 +887,11 @@ async def cmd_top(msg: types.Message):
     await msg.answer("\n".join(lines))
 
 @dp.message(F.text == "❓ راهنما")
+@dp.message(Command("cancel"))
+async def cmd_cancel(msg: types.Message, state: FSMContext):
+    await state.clear()
+    await msg.answer("✖️ عملیات جاری لغو شد.", reply_markup=main_kb())
+
 @dp.message(Command("help"))
 async def cmd_help(msg: types.Message):
     await msg.answer(GUIDE_TEXT, reply_markup=main_kb())
@@ -834,6 +989,15 @@ async def run_tick() -> dict:
             await dbm.save_country(seller)
             await notify(offer["seller_id"], f"🛒 پیشنهاد فروشت در بازار جهانی منقضی شد (۷ روز گذشت) و {RESOURCES[offer['resource']]} × {offer['amount']:,} به انبارت برگشت.")
         stats["offers_expired"] += 1
+    # direct (reply-based) trade offers expire after 48h; resources return to seller
+    async for doc in dbm.db.direct_trades.find({"status": "pending", "ts": {"$lt": t - 2 * logic.DAY}}):
+        await dbm.db.direct_trades.update_one({"_id": doc["_id"]}, {"$set": {"status": "expired"}})
+        seller = await dbm.get_country(doc["seller_id"])
+        if seller and seller.get("alive", True):
+            seller["res"][doc["resource"]] = seller["res"].get(doc["resource"], 0) + doc["amount"]
+            await dbm.save_country(seller)
+            await notify(doc["seller_id"], "💱 پیشنهاد ترید مستقیمت منقضی شد (۴۸ ساعت گذشت) و منابع به انبارت برگشت.")
+        stats["offers_expired"] += 1
     return stats
 
 async def handle_tick(request: web.Request) -> web.Response:
@@ -857,6 +1021,14 @@ async def handle_webhook(request: web.Request) -> web.Response:
 
 async def main():
     dbm.init_db()
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="🏳️ شروع بازی / ساخت کشور"),
+            BotCommand(command="help", description="❓ راهنمای بازی"),
+            BotCommand(command="cancel", description="✖️ لغو عملیات جاری"),
+        ])
+    except Exception:
+        log.exception("set_my_commands failed")
     await dbm.ensure_indexes()
     base = os.environ.get("WEBHOOK_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL", "")
     app = web.Application()
