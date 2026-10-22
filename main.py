@@ -1054,22 +1054,28 @@ async def run_tick() -> dict:
                 await notify(c["user_id"], "💥 کشور تو به دلیل اعتراض‌های پی‌درپی و رضایت بسیار پایین فروپاشید! با /start یک کشور تازه بساز.")
         if changed:
             await dbm.save_country(c)
-    # cross-country migration: unhappy populations move to happier countries
+    # cross-country migration (DAILY-GATED BUGFIX 2026-10-22): plan_migration's
+    # amounts are per-day rates (0.2%/day, cap 3000/day), but run_tick fires
+    # every minute. Without this gate an unhappy country bled population every
+    # minute and both players got spammed with migration notifications.
     try:
-        all_c = [doc async for doc in dbm.db.countries.find({"alive": True, "frozen": {"$ne": True}})]
-        by_id = {d["user_id"]: d for d in all_c}
-        for src_id, dst_id, amount in logic.plan_migration(all_c):
-            src_c, dst_c = by_id[src_id], by_id[dst_id]
-            src_c["population"] = max(10000, src_c["population"] - amount)
-            logic.adjust_cities(src_c, -amount)
-            dst_c["population"] += amount
-            logic.adjust_cities(dst_c, amount)
-            src_c["mig_out_today"] = src_c.get("mig_out_today", 0) + amount
-            dst_c.setdefault("mig_in_today", []).append({"from": src_c["name"], "amount": amount})
-            await dbm.save_country(src_c); await dbm.save_country(dst_c)
-            stats["migrants"] += amount
-            await notify(dst_id, f"🧳 {amount:,} مهاجر از کشور «{src_c['name']}» (رضایت پایین) به کشورت آمدند.")
-            await notify(src_id, f"🧳 {amount:,} نفر از مردم کشورت به «{dst_c['name']}» مهاجرت کردند. رضایت مردم را بالا ببر تا مهاجرت متوقف شود.")
+        meta = await dbm.db.meta.find_one({"_id": "migration"})
+        if t - (meta.get("ts", 0) if meta else 0) >= logic.DAY:
+            all_c = [doc async for doc in dbm.db.countries.find({"alive": True, "frozen": {"$ne": True}})]
+            by_id = {d["user_id"]: d for d in all_c}
+            for src_id, dst_id, amount in logic.plan_migration(all_c):
+                src_c, dst_c = by_id[src_id], by_id[dst_id]
+                src_c["population"] = max(10000, src_c["population"] - amount)
+                logic.adjust_cities(src_c, -amount)
+                dst_c["population"] += amount
+                logic.adjust_cities(dst_c, amount)
+                src_c["mig_out_today"] = src_c.get("mig_out_today", 0) + amount
+                dst_c.setdefault("mig_in_today", []).append({"from": src_c["name"], "amount": amount})
+                await dbm.save_country(src_c); await dbm.save_country(dst_c)
+                stats["migrants"] += amount
+                await notify(dst_id, f"🧳 {amount:,} مهاجر از کشور «{src_c['name']}» (رضایت پایین) به کشورت آمدند.")
+                await notify(src_id, f"🧳 {amount:,} نفر از مردم کشورت به «{dst_c['name']}» مهاجرت کردند. رضایت مردم را بالا ببر تا مهاجرت متوقف شود.")
+            await dbm.db.meta.update_one({"_id": "migration"}, {"$set": {"ts": t}}, upsert=True)
     except Exception:
         log.exception("migration phase failed")
     # wars whose 3 days are over
