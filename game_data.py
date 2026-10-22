@@ -169,6 +169,7 @@ BUILDINGS = {
     "university":{"fa": "🎓 دانشگاه",       "cost": {"materials": 70, "money": 500},  "upkeep": 25,  "desc": "امتیاز تحقیق روزانه"},
     "hospital":  {"fa": "🏥 بیمارستان",     "cost": {"materials": 60, "money": 400},  "upkeep": 20,  "desc": "رضایت و رشد جمعیت"},
     "barracks":  {"fa": "🪖 پادگان",        "cost": {"materials": 70, "iron": 20, "money": 350}, "upkeep": 18, "desc": "ظرفیت و قدرت ارتش"},
+    "airport_inter": {"fa": "🛸 فرودگاه بین‌سیاره‌ای", "cost": {"materials": 200, "iron": 200, "titanium": 80, "money": 6000}, "upkeep": 150, "desc": "مهاجرت از سیاره‌های دیگر"},
 }
 
 # Research tree: id -> data. branch, cost_rp, hours, prereq, effects (flat mods merged into country mods)

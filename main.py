@@ -64,6 +64,7 @@ def main_kb(selective: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🏗️ ساختمان‌ها"), KeyboardButton(text="🔬 تحقیق")],
         [KeyboardButton(text="🛒 تجارت"), KeyboardButton(text="🤝 دیپلماسی")],
         [KeyboardButton(text="🪖 ارتش و جنگ"), KeyboardButton(text="🏆 رتبه‌بندی")],
+        [KeyboardButton(text="💰 درآمد و مالی"), KeyboardButton(text="🧳 مهاجرت")],
         [KeyboardButton(text="❓ راهنما"), KeyboardButton(text="✖️ بستن منو")],
     ])
 
@@ -97,6 +98,8 @@ GUIDE_TEXT = (
     "• ⚔️ جنگ ۳ روز واقعی طول می‌کشد و همزمان فقط یک جنگ می‌توانی داشته باشی. جنگ فقط با کشورهای هم‌سیاره ممکن است و بعد از هر جنگ، هر دو طرف ۳ روز آتش‌بس دارند. پیروزی کامل = تصرف کل کشور حریف؛ پیروزی جزئی = ۲۵٪ خاک و معادنش.\n"
     "• 🤝 همسایه شدن (۱ تا ۴ کشور) تجارت و لجستیک را ارزان و سریع می‌کند.\n"
     "• 🛒 بازار جهانی برای همه بازیکن‌هاست، حتی خارج از گروه تو. پیشنهادهای فروش بعد از ۷ روز منقضی می‌شوند و منابع فروش‌نرفته به انبارت برمی‌گردند. در گروه، برای ترید مستقیم با یک بازیکن روی پیامش ریپلای بزن و بنویس «ترید»."
+    "• 💰 از بخش «درآمد و مالی» ببین پولت دقیقاً از کجا می‌آید و کجا می‌رود.\n"
+    "• 🧳 مهاجرت: کشورهای شاد از آدم‌های بی‌کشور و مردم کشورهای ناراضی مهاجر می‌گیرند؛ با فرودگاه بین‌سیاره‌ای (ساختمان) از سیاره‌های دیگر هم می‌توانی مهاجر بگیری.\n"
 )
 
 # ---------------------------------------------------------------- registration wizard
@@ -353,7 +356,7 @@ async def build_cb(cb: types.CallbackQuery):
             await cb.answer(f"منابع کافی نداری ({k}: {have}/{v})", show_alert=True); return
     for k, v in cost.items():
         if k == "money": c["money"] -= v
-        else: c["res"][k] -= v
+        else: c["res"][k] = c["res"].get(k, 0) - v
     c["buildings"][bid] = c["buildings"].get(bid, 0) + 1
     await dbm.save_country(c)
     await cb.message.answer(f"✅ {BUILDINGS[bid]['fa']} ساخته شد — سطح {c['buildings'][bid]}")
@@ -478,6 +481,7 @@ async def trade_buy(cb: types.CallbackQuery):
     c["money"] -= total
     c["res"][offer["resource"]] = c["res"].get(offer["resource"], 0) + offer["amount"]
     seller["money"] += offer["price"]
+    seller["fin_trade"] = seller.get("fin_trade", 0) + offer["price"]
     await dbm.save_country(c); await dbm.save_country(seller)
     await dbm.db.trade_offers.delete_one({"_id": oid})
     try:
@@ -535,6 +539,93 @@ async def trade_price(msg: types.Message, state: FSMContext):
     await dbm.db.trade_offers.insert_one({"seller_id": c["user_id"], "resource": data["resource"], "amount": data["amount"], "price": price, "ts": logic.now_ts()})
     await state.clear()
     await msg.answer(f"✅ پیشنهاد فروش ثبت شد: {RESOURCES[data['resource']]} × {data['amount']:,} به قیمت {price:,} 💰 — در بازار جهانی برای همه قابل خرید است.")
+
+# ---------------------------------------------------------------- finance & migration
+def finance_text(c: dict) -> str:
+    fin = c.get("last_fin", {})
+    prod = logic.production(c)
+    b = c["buildings"]
+    tax_factor = {1: 0.6, 2: 1.0, 3: 1.6}[c["tax_rate"]]
+    est_tax = int(c["population"] * 0.004 * tax_factor * (1 + logic.mod(c, "economy")))
+    est_upkeep = (int(sum(BUILDINGS[k]["upkeep"] * v for k, v in b.items()) * (1 + logic.mod(c, "upkeep")))
+                  + int(c.get("soldiers", 0) * 0.15) + int(c["population"] * 0.0008))
+    cap = logic.capacity(c)
+    lines = [f"💰 درآمد و مالی «{c['name']}»", f"خزانه: {c['money']:,} 💰", ""]
+    if fin:
+        lines += ["📅 آخرین روز کامل:",
+                  f"• مالیات: +{fin.get('tax', 0):,} 💰",
+                  f"• کارخانه‌ها: +{fin.get('factory', 0):,} 💰",
+                  f"• فروش تجارت: +{fin.get('trade', 0):,} 💰",
+                  f"• نگهداری ساختمان‌ها: −{fin.get('upkeep_buildings', 0):,} 💰",
+                  f"• نگهداری ارتش: −{fin.get('upkeep_army', 0):,} 💰",
+                  f"• خدمات شهری: −{fin.get('civic', 0):,} 💰",
+                  f"• خالص روزانه (بدون تجارت): {fin.get('net_tick', 0):+,} 💰", ""]
+    lines += [f"🔮 برآورد امروز: مالیات ~{est_tax:,} 💰 | هزینه‌ها ~{est_upkeep:,} 💰",
+              "", "🏭 تولید روزانه (ناخالص):"]
+    for r, v in prod.items():
+        if v:
+            lines.append(f"• {RESOURCES.get(r, r)}: +{int(v):,}")
+    cons_f = int(c["population"] * 0.010)
+    cons_w = int(c["population"] * 0.008)
+    cons_e = int(c["population"] * 0.005 + sum(b.values()) * 60)
+    mig_in_total = sum(m["amount"] for m in c.get("mig_in_today", []))
+    lines += ["", f"🍽️ مصرف روزانه: غذا {cons_f:,} | آب {cons_w:,} | انرژی {cons_e:,}",
+              f"👥 جمعیت: {c['population']:,} / ظرفیت زمین {cap:,} ({c['population'] / max(1, cap) * 100:.0f}٪ پر)",
+              f"📈 تغییر جمعیت دیروز: {c.get('last_pop_delta', 0):+,} نفر",
+              f"🧳 مهاجرت دیروز: بی‌کشور +{c.get('last_mig_pool', 0):,} | از کشورها +{mig_in_total:,} | خروج −{c.get('mig_out_today', 0):,}"]
+    return "\n".join(lines)
+
+@dp.message(F.text == "💰 درآمد و مالی")
+@dp.message(Command("finance"))
+async def cmd_finance(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    await msg.answer(finance_text(c))
+
+def migration_text(c: dict) -> str:
+    has_inter = c["buildings"].get("airport_inter", 0) > 0
+    lines = [f"🧳 مهاجرت «{c['name']}»", "",
+             "✈️ فرودگاه بین‌المللی: ✅ داری (پیش‌فرض) — مهاجرت درون سیاره خودت فعال است.",
+             ("🛸 فرودگاه بین‌سیاره‌ای: ✅ داری — از همه سیاره‌ها مهاجر می‌گیری."
+              if has_inter else
+              "🛸 فرودگاه بین‌سیاره‌ای: ❌ نداری — از بخش 🏗️ ساختمان‌ها بسازش (۶٬۰۰۰ 💰 + مصالح/آهن/تیتانیوم) تا از سیاره‌های دیگر هم مهاجر بگیری."),
+             "", f"پذیرش مهاجر: {'روشن ✅' if c.get('accept_migrants', True) else 'خاموش ⛔'}",
+             "", "📜 قوانین مهاجرت:",
+             "• آدم‌های بی‌کشور هر روز به کشورهای شاد (رضایت ≥ ۵۵٪) و بدون جنگ می‌آیند؛ مالیات پایین‌تر = جذب بیشتر.",
+             "• مردم کشورهای ناراضی (رضایت < ۴۵٪) به شادترین کشور قابل دسترس مهاجرت می‌کنند؛ رضایت مردم را بالا نگه دار تا جمعیت از دست ندهی.",
+             "• ظرفیت جمعیت کشور = مساحت × ۶۰ نفر؛ نزدیک ظرفیت، رشد جمعیت و مهاجرت کند می‌شود."]
+    ins = c.get("mig_in_today", [])
+    if ins:
+        lines.append("")
+        lines.append("ورودی‌های امروز از کشورها: " + "، ".join(f"«{m['from']}» +{m['amount']:,}" for m in ins))
+    if c.get("mig_out_today"):
+        lines.append(f"خروج امروز: −{c['mig_out_today']:,} نفر")
+    return "\n".join(lines)
+
+def migration_kb(c: dict):
+    kb = InlineKeyboardBuilder()
+    kb.button(text=("⛔ بستن پذیرش مهاجر" if c.get("accept_migrants", True) else "✅ باز کردن پذیرش مهاجر"), callback_data="mig:toggle")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(1)
+    return kb.as_markup()
+
+@dp.message(F.text == "🧳 مهاجرت")
+async def cmd_migration(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    await msg.answer(migration_text(c), reply_markup=migration_kb(c))
+
+@dp.callback_query(F.data == "mig:toggle")
+async def mig_toggle(cb: types.CallbackQuery):
+    c = await dbm.get_country(cb.from_user.id)
+    if not c or not c.get("alive", True):
+        await cb.answer("کشوری نداری.", show_alert=True); return
+    c["accept_migrants"] = not c.get("accept_migrants", True)
+    await dbm.save_country(c)
+    await cb.message.edit_text(migration_text(c), reply_markup=migration_kb(c))
+    await cb.answer("تنظیم پذیرش مهاجر عوض شد.")
 
 # ------------------------------------------------- direct group trade (reply-based)
 class DT(StatesGroup):
@@ -643,6 +734,7 @@ async def dt_accept(cb: types.CallbackQuery):
         await cb.answer(f"پول کافی نداری ({buyer['money']:,}/{doc['price']:,} 💰)", show_alert=True); return
     buyer["money"] -= doc["price"]
     seller["money"] += doc["price"] - fee
+    seller["fin_trade"] = seller.get("fin_trade", 0) + doc["price"] - fee
     buyer["res"][doc["resource"]] = buyer["res"].get(doc["resource"], 0) + doc["amount"]
     await dbm.save_country(buyer); await dbm.save_country(seller)
     await dbm.db.direct_trades.update_one({"_id": doc["_id"]}, {"$set": {"status": "done"}})
@@ -934,7 +1026,7 @@ async def notify(user_id: int, text: str):
 async def run_tick() -> dict:
     """Called every 1 minute by cron-job.com. Drives ALL game timers."""
     t = logic.now_ts()
-    stats = {"charges": 0, "research_done": 0, "daily": 0, "wars_resolved": 0, "collapsed": 0, "frozen": 0, "offers_expired": 0}
+    stats = {"charges": 0, "research_done": 0, "daily": 0, "wars_resolved": 0, "collapsed": 0, "frozen": 0, "offers_expired": 0, "migrants": 0}
     countries = await dbm.all_alive_countries()
     for c in countries:
         changed = False
@@ -962,6 +1054,24 @@ async def run_tick() -> dict:
                 await notify(c["user_id"], "💥 کشور تو به دلیل اعتراض‌های پی‌درپی و رضایت بسیار پایین فروپاشید! با /start یک کشور تازه بساز.")
         if changed:
             await dbm.save_country(c)
+    # cross-country migration: unhappy populations move to happier countries
+    try:
+        all_c = [doc async for doc in dbm.db.countries.find({"alive": True, "frozen": {"$ne": True}})]
+        by_id = {d["user_id"]: d for d in all_c}
+        for src_id, dst_id, amount in logic.plan_migration(all_c):
+            src_c, dst_c = by_id[src_id], by_id[dst_id]
+            src_c["population"] = max(10000, src_c["population"] - amount)
+            logic.adjust_cities(src_c, -amount)
+            dst_c["population"] += amount
+            logic.adjust_cities(dst_c, amount)
+            src_c["mig_out_today"] = src_c.get("mig_out_today", 0) + amount
+            dst_c.setdefault("mig_in_today", []).append({"from": src_c["name"], "amount": amount})
+            await dbm.save_country(src_c); await dbm.save_country(dst_c)
+            stats["migrants"] += amount
+            await notify(dst_id, f"🧳 {amount:,} مهاجر از کشور «{src_c['name']}» (رضایت پایین) به کشورت آمدند.")
+            await notify(src_id, f"🧳 {amount:,} نفر از مردم کشورت به «{dst_c['name']}» مهاجرت کردند. رضایت مردم را بالا ببر تا مهاجرت متوقف شود.")
+    except Exception:
+        log.exception("migration phase failed")
     # wars whose 3 days are over
     async for war in dbm.db.wars.find({"end_ts": {"$lte": t}}):
         attacker = await dbm.get_country(war["attacker_id"])
@@ -1046,6 +1156,7 @@ async def main():
             BotCommand(command="help", description="❓ راهنمای بازی"),
             BotCommand(command="cancel", description="✖️ لغو عملیات جاری"),
             BotCommand(command="menu", description="📋 نمایش منوی اصلی"),
+            BotCommand(command="finance", description="💰 درآمد و مالی"),
         ])
     except Exception:
         log.exception("set_my_commands failed")

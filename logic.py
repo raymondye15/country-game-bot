@@ -64,10 +64,11 @@ def new_country(user_id: int, planet: str, continent: str, government: str,
         "planet": planet, "continent": continent, "government": government,
         "population": pop, "area": area, "initial_area": area,
         "money": 1500, "rp": 10,
-        "res": {"food": 2000, "water": 2000, "energy": 1500, "materials": 300, "iron": 120, "titanium": 40, "special": 20},
+        "res": {"food": 2000, "water": 2000, "energy": 3000, "materials": 300, "iron": 120, "titanium": 40, "special": 20},
         "mines": mines,
         "buildings": {"farm": 2, "waterplant": 2, "powerplant": 1, "mine": 1, "factory": 1, "university": 0, "hospital": 0, "barracks": 0},
-        "soldiers": 0,
+        "soldiers": 0, "accept_migrants": True, "fin_trade": 0, "last_fin": {},
+        "mig_in_today": [], "mig_out_today": 0, "last_mig_pool": 0, "last_pop_delta": 0,
         "happiness": 65, "tax_rate": 2,  # 1=low 2=mid 3=high
         "neighbors": [], "alliances": [], "naps": [],
         "borders": borders,
@@ -148,21 +149,60 @@ def military_power(c: dict) -> int:
 def defense_power(c: dict) -> int:
     return int(military_power(c) * (1 + mod(c, "defense")))
 
-def daily_tick(c: dict, t: int = None) -> dict:
-    """One in-game day of economy. Returns report lines + notifications."""
-    t = t or now_ts()
+def production(c: dict) -> dict:
+    """Gross daily production of every resource (used by the tick and the finance view)."""
     b = c["buildings"]
     mine_bonus = 1 + 0.25 * b.get("mine", 0)
-    report = []
     prod = {
-        "food": (2000 + b.get("farm", 0) * 4000) * (1 + mod(c, "food_prod")),
-        "water": (2000 + b.get("waterplant", 0) * 4000) * (1 + mod(c, "water_prod")),
-        "energy": (1200 + b.get("powerplant", 0) * 3500) * (1 + mod(c, "energy_prod")),
+        "food": (4000 + b.get("farm", 0) * 4000) * (1 + mod(c, "food_prod")),
+        "water": (3000 + b.get("waterplant", 0) * 4000) * (1 + mod(c, "water_prod")),
+        "energy": (2500 + b.get("powerplant", 0) * 3500) * (1 + mod(c, "energy_prod")),
         "materials": (150 + b.get("factory", 0) * 220) * (1 + mod(c, "materials_prod")),
         "iron": 0, "titanium": 0, "special": 0,
     }
     for r, cnt in c["mines"].items():
         prod[r] = prod.get(r, 0) + cnt * 90 * mine_bonus * (1 + mod(c, "mine_prod"))
+    return prod
+
+def capacity(c: dict) -> int:
+    """Soft population capacity of the land: area x 60 people."""
+    return int(c["area"] * 60)
+
+def adjust_cities(c: dict, delta: int):
+    total = sum(city["pop"] for city in c["cities"]) or 1
+    for city in c["cities"]:
+        city["pop"] = max(1000, int(city["pop"] + delta * city["pop"] / total))
+
+def plan_migration(countries: list) -> list:
+    """Unhappy populations move to the happiest reachable country.
+    Reachable = same planet, unless the DESTINATION has an interplanetary airport.
+    Returns [(src_user_id, dst_user_id, amount)]."""
+    moves = []
+    dests = [d for d in countries if d.get("alive", True) and d.get("accept_migrants", True)
+             and d["happiness"] >= 60 and not d.get("war_id")]
+    for src_c in countries:
+        if not src_c.get("alive", True) or src_c["happiness"] >= 45 or src_c.get("war_id"):
+            continue
+        if src_c["population"] <= 30000:
+            continue
+        reachable = [d for d in dests if d["user_id"] != src_c["user_id"]
+                     and (d["planet"] == src_c["planet"] or d["buildings"].get("airport_inter", 0) > 0)
+                     and d["population"] < capacity(d) * 1.05]
+        if not reachable:
+            continue
+        dst = max(reachable, key=lambda d: d["happiness"])
+        headroom = int(capacity(dst) * 1.05 - dst["population"])
+        amount = min(int(src_c["population"] * 0.002), 3000, headroom)
+        if amount >= 100:
+            moves.append((src_c["user_id"], dst["user_id"], amount))
+    return moves
+
+def daily_tick(c: dict, t: int = None) -> dict:
+    """One in-game day of economy. Returns report lines + notifications."""
+    t = t or now_ts()
+    b = c["buildings"]
+    report = []
+    prod = production(c)
     cons = {
         "food": c["population"] * 0.010,
         "water": c["population"] * 0.008,
@@ -174,10 +214,17 @@ def daily_tick(c: dict, t: int = None) -> dict:
     # taxes & upkeep
     tax_factor = {1: 0.6, 2: 1.0, 3: 1.6}[c["tax_rate"]]
     income = int(c["population"] * 0.004 * tax_factor * (1 + mod(c, "economy")))
-    upkeep = int(sum(BUILDINGS[k]["upkeep"] * v for k, v in b.items()) * (1 + mod(c, "upkeep")))
-    upkeep += int(c.get("soldiers", 0) * 0.15)  # money sink: daily army upkeep
+    upkeep_buildings = int(sum(BUILDINGS[k]["upkeep"] * v for k, v in b.items()) * (1 + mod(c, "upkeep")))
+    upkeep_army = int(c.get("soldiers", 0) * 0.15)  # money sink: daily army upkeep
+    civic = int(c["population"] * 0.0008)  # city services scale with population (money sink)
+    upkeep = upkeep_buildings + upkeep_army + civic
     factory_income = b.get("factory", 0) * 120
     c["money"] += income + factory_income - upkeep
+    trade_in = c.get("fin_trade", 0)
+    c["fin_trade"] = 0
+    c["last_fin"] = {"tax": income, "factory": factory_income, "trade": trade_in,
+                     "upkeep_buildings": upkeep_buildings, "upkeep_army": upkeep_army,
+                     "civic": civic, "net_tick": income + factory_income - upkeep}
     # research points
     rp_gain = 2 + b.get("university", 0) * 6
     c["rp"] += rp_gain
@@ -199,11 +246,31 @@ def daily_tick(c: dict, t: int = None) -> dict:
     growth = 0.004 + (c["happiness"] - 50) / 20000.0 + mod(c, "pop_growth") * 0.002 + b.get("hospital", 0) * 0.0005
     if shortage:
         growth -= 0.004
+    if growth > 0:
+        ratio = c["population"] / max(1, capacity(c))
+        if ratio > 0.8:  # land gets crowded: growth fades out toward capacity
+            growth *= max(0.0, 1 - (ratio - 0.8) / 0.4)
     old_pop = c["population"]
     c["population"] = max(10000, int(c["population"] * (1 + growth)))
     ratio = c["population"] / max(1, old_pop)
     for city in c["cities"]:
         city["pop"] = int(city["pop"] * ratio)
+    # immigrants without a country arrive daily (same-planet pool; the default
+    # international airport makes every country reachable for them)
+    c["mig_in_today"] = []
+    c["mig_out_today"] = 0
+    mig_pool = 0
+    if c.get("accept_migrants", True) and c["happiness"] >= 55 and not shortage and not c.get("war_id"):
+        attract = 0.5 + (c["happiness"] - 55) / 45.0 + {1: 0.3, 2: 0.0, 3: -0.3}[c["tax_rate"]]
+        headroom = int(capacity(c) * 1.1 - c["population"])
+        if attract > 0 and headroom > 0:
+            mig_pool = min(int(c["population"] * 0.0015 * attract), headroom)
+            if mig_pool > 0:
+                c["population"] += mig_pool
+                adjust_cities(c, mig_pool)
+                report.append(f"🧳 مهاجران بی‌کشور: +{mig_pool:,} نفر وارد کشورت شدند.")
+    c["last_mig_pool"] = mig_pool
+    c["last_pop_delta"] = c["population"] - old_pop
     # protests / collapse
     collapsed = False
     stability = 1 - mod(c, "stability")
