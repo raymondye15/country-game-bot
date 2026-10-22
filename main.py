@@ -40,16 +40,8 @@ EN_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9 '\-]{1,29}$")
 
 # ---------------------------------------------------------------- helpers
 async def gate(msg: types.Message) -> bool:
-    """Groups need >=3 distinct human users who interacted with the bot."""
-    if msg.chat.type == "private":
-        return True
-    if msg.from_user and not msg.from_user.is_bot:
-        count = await dbm.register_group_human(msg.chat.id, msg.from_user.id)
-    else:
-        count = await dbm.group_human_count(msg.chat.id)
-    if count < 3:
-        await msg.answer(f"🔒 این گروه هنوز فعال نشده است.\nبازی در گروه وقتی باز می‌شود که حداقل ۳ عضو انسان (غیر ربات) با ربات در همین گروه تعامل کنند.\nاعضای ثبت‌شده تا الان: {count}/۳")
-        return False
+    """Group gate removed by the owner's request (2026-10-22): the game works in
+    any group immediately, with no minimum-member condition."""
     return True
 
 def main_kb() -> ReplyKeyboardMarkup:
@@ -125,6 +117,8 @@ async def cmd_start(msg: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("reg:planet:"), Reg.planet)
 async def reg_planet(cb: types.CallbackQuery, state: FSMContext):
+    if cb.message.chat.type != "private":
+        await cb.answer("ساخت کشور فقط در پیوی ربات ممکن است؛ به پیوی ربات بیا.", show_alert=True); return
     pid = cb.data.split(":")[2]
     p = PLANETS[pid]
     if await dbm.planet_country_count(pid) >= p["capacity"]:
@@ -140,6 +134,8 @@ async def reg_planet(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("reg:cont:"), Reg.continent)
 async def reg_cont(cb: types.CallbackQuery, state: FSMContext):
+    if cb.message.chat.type != "private":
+        await cb.answer("ساخت کشور فقط در پیوی ربات ممکن است؛ به پیوی ربات بیا.", show_alert=True); return
     cid = cb.data.split(":")[2]
     data = await state.get_data()
     cont = PLANETS[data["planet"]]["continents"][cid]
@@ -161,6 +157,8 @@ async def reg_govguide(cb: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("reg:gov:"), Reg.government)
 async def reg_gov(cb: types.CallbackQuery, state: FSMContext):
+    if cb.message.chat.type != "private":
+        await cb.answer("ساخت کشور فقط در پیوی ربات ممکن است؛ به پیوی ربات بیا.", show_alert=True); return
     gid = cb.data.split(":")[2]
     await state.update_data(government=gid)
     await state.set_state(Reg.cname)
@@ -169,6 +167,8 @@ async def reg_gov(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.message(Reg.cname)
 async def reg_cname(msg: types.Message, state: FSMContext):
+    if msg.chat.type != "private":
+        await msg.answer("ساخت کشور فقط در پیوی ربات ممکن است؛ به پیوی ربات بیا و /start بزن."); return
     name = msg.text.strip()
     if not EN_NAME.match(name):
         await msg.answer("❌ اسم کشور باید انگلیسی باشد (فقط حروف انگلیسی، عدد، فاصله). دوباره بفرست:"); return
@@ -180,6 +180,8 @@ async def reg_cname(msg: types.Message, state: FSMContext):
 
 @dp.message(Reg.capital)
 async def reg_capital(msg: types.Message, state: FSMContext):
+    if msg.chat.type != "private":
+        await msg.answer("ساخت کشور فقط در پیوی ربات ممکن است؛ به پیوی ربات بیا و /start بزن."); return
     cap = msg.text.strip()
     if not EN_NAME.match(cap):
         await msg.answer("❌ اسم پایتخت باید انگلیسی باشد. دوباره بفرست:"); return
@@ -189,6 +191,8 @@ async def reg_capital(msg: types.Message, state: FSMContext):
 
 @dp.message(Reg.city1)
 async def reg_city1(msg: types.Message, state: FSMContext):
+    if msg.chat.type != "private":
+        await msg.answer("ساخت کشور فقط در پیوی ربات ممکن است؛ به پیوی ربات بیا و /start بزن."); return
     if not (2 <= len(msg.text.strip()) <= 30):
         await msg.answer("اسم شهر باید ۲ تا ۳۰ حرف باشد:"); return
     await state.update_data(city1=msg.text.strip()); await state.set_state(Reg.city2)
@@ -196,6 +200,8 @@ async def reg_city1(msg: types.Message, state: FSMContext):
 
 @dp.message(Reg.city2)
 async def reg_city2(msg: types.Message, state: FSMContext):
+    if msg.chat.type != "private":
+        await msg.answer("ساخت کشور فقط در پیوی ربات ممکن است؛ به پیوی ربات بیا و /start بزن."); return
     if not (2 <= len(msg.text.strip()) <= 30):
         await msg.answer("اسم شهر باید ۲ تا ۳۰ حرف باشد:"); return
     await state.update_data(city2=msg.text.strip()); await state.set_state(Reg.city3)
@@ -203,6 +209,8 @@ async def reg_city2(msg: types.Message, state: FSMContext):
 
 @dp.message(Reg.city3)
 async def reg_city3(msg: types.Message, state: FSMContext):
+    if msg.chat.type != "private":
+        await msg.answer("ساخت کشور فقط در پیوی ربات ممکن است؛ به پیوی ربات بیا و /start بزن."); return
     if not (2 <= len(msg.text.strip()) <= 30):
         await msg.answer("اسم شهر باید ۲ تا ۳۰ حرف باشد:"); return
     data = await state.get_data()
