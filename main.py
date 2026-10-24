@@ -102,6 +102,7 @@ GUIDE_TEXT = (
     "• 🧳 مهاجرت: کشورهای شاد از آدم‌های بی‌کشور و مردم کشورهای ناراضی مهاجر می‌گیرند؛ با فرودگاه بین‌سیاره‌ای (ساختمان) از سیاره‌های دیگر هم می‌توانی مهاجر بگیری.\n"
     "• 👶 زاد و ولد و مرگ‌ومیر: هر ساعت در کشورت تولد و مرگ رخ می‌دهد؛ رضایت بالا و بیمارستان تولد را بیشتر و مرگ‌ومیر را کمتر می‌کند و گرسنگی مرگ‌ومیر را شدید بالا می‌برد. همه سیستم‌های زنده بازی (اقتصاد، جمعیت، رضایت، امتیاز تحقیق، مهاجرت) ساعتی کار می‌کنند؛ گزارش کامل هر روز می‌آید.\n"
     "• 🏆 رتبه‌بندی را می‌توانی بر اساس قدرت ملی، امتیاز اقتصادی، امتیاز علمی، جمعیت یا مساحت مرتب کنی. امتیاز اقتصادی از تولید روزانه، ساختمان‌ها و معادن می‌آید (پولِ انباشته به‌تنهایی رتبه نمی‌آورد) و امتیاز علمی از تحقیقات کامل‌شده و سرعت تولید امتیاز تحقیق.\n"
+    "• 🎛️ لازم نیست دکمه‌های پایین صفحه را بزنی: اسم هر بخش را فقط بنویس (مثل «لیدربورد»، «تجارت»، «کشور من» یا «منو») تا همان بخش به صورت منوی شیشه‌ای باز شود. منوها در گروه هم فقط برای خودت کار می‌کنند.\n"
 )
 
 # ---------------------------------------------------------------- registration wizard
@@ -122,7 +123,8 @@ async def cmd_start(msg: types.Message, state: FSMContext):
         return
     c = await dbm.get_country(msg.from_user.id)
     if c and c.get("alive"):
-        await msg.answer(f"خوش برگشتی، حاکم «{c['name']}»! 👋", reply_markup=main_kb())
+        sent = await msg.answer(f"خوش برگشتی، حاکم «{c['name']}»! 👋", reply_markup=glass_kb())
+        await track_menu(sent, msg.from_user.id)
         return
     if c and not c.get("alive"):
         await dbm.delete_country(msg.from_user.id)
@@ -235,7 +237,8 @@ async def _finish_reg(answer, state, user, cities):
     hint = ("\n\nکشورهای هم‌قاره‌ای تو: " + "، ".join(o["name"] for o in others[:5]) +
             "\nاز بخش 🤝 دیپلماسی می‌توانی برایشان درخواست همسایگی بفرستی (۱ تا ۴ همسایه).") if others else \
            "\n\nفعلاً در قاره تو کشور دیگری نیست؛ پس نمی‌توانی همسایه انتخاب کنی — بقیه باید همسایه تو شوند!"
-    await answer("🎉 کشورت ساخته شد!\n\n" + logic.country_text(c) + hint, reply_markup=main_kb())
+    sent = await answer("🎉 کشورت ساخته شد!\n\n" + logic.country_text(c) + hint, reply_markup=glass_kb())
+    await track_menu(sent, user.id)
 
 async def _city_advance(answer, state, user, value):
     cur = await state.get_state()
@@ -292,12 +295,19 @@ async def cmd_country(msg: types.Message):
     c = await my_country(msg)
     if not c: return
     logic.regen_charges(c); await dbm.save_country(c)
+    text, kb = country_view(c)
+    sent = await msg.answer(text, reply_markup=kb)
+    await track_menu(sent, msg.from_user.id)
+
+def country_view(c: dict, back: bool = False):
     kb = InlineKeyboardBuilder()
     kb.button(text="⚙️ تنظیم مالیات", callback_data="tax:menu")
     kb.button(text="🔭 اکتشاف", callback_data="explore:menu")
     kb.adjust(2)
+    if back:
+        kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
     kb.button(text="✖️ بستن", callback_data="close")
-    await msg.answer(logic.country_text(c), reply_markup=kb.as_markup())
+    return logic.country_text(c), kb.as_markup()
 
 @dp.callback_query(F.data == "tax:menu")
 async def tax_menu(cb: types.CallbackQuery):
@@ -327,7 +337,7 @@ async def cmd_explore(msg: types.Message):
     logic.regen_charges(c); await dbm.save_country(c)
     await send_explore_menu(msg, c)
 
-async def send_explore_menu(msg: types.Message, c: dict):
+def explore_view(c: dict, back: bool = False):
     kb = InlineKeyboardBuilder()
     for d, label in DIRECTIONS.items():
         b = c["borders"][d]
@@ -339,8 +349,15 @@ async def send_explore_menu(msg: types.Message, c: dict):
     if c["explore_charges"] < cap:
         left = max(0, logic.HOUR - (logic.now_ts() - c["last_charge_ts"]))
         nxt = f"\nشارژ بعدی: {left // 60} دقیقه دیگر"
+    if back:
+        kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
     kb.button(text="✖️ بستن", callback_data="close")
-    await msg.answer(f"🔭 شارژ اکتشاف: {c['explore_charges']}/{cap}{nxt}\nهزینه هر اکتشاف: ⚡۱۵ 💧غذا ۲۰ 💰۲۵\nجهت اکتشاف را انتخاب کن:", reply_markup=kb.as_markup())
+    return (f"🔭 شارژ اکتشاف: {c['explore_charges']}/{cap}{nxt}\nهزینه هر اکتشاف: ⚡۱۵ 💧غذا ۲۰ 💰۲۵\nجهت اکتشاف را انتخاب کن:",
+            kb.as_markup())
+
+async def send_explore_menu(msg: types.Message, c: dict):
+    text, kb = explore_view(c)
+    await msg.answer(text, reply_markup=kb)
 
 @dp.callback_query(F.data == "explore:menu")
 async def explore_menu_cb(cb: types.CallbackQuery):
@@ -369,6 +386,11 @@ async def cmd_build(msg: types.Message):
     if not await gate(msg): return
     c = await my_country(msg)
     if not c: return
+    text, kb = build_view(c)
+    sent = await msg.answer(text, reply_markup=kb)
+    await track_menu(sent, msg.from_user.id)
+
+def build_view(c: dict, back: bool = False):
     kb = InlineKeyboardBuilder()
     lines = ["🏗️ ساختمان‌های تو:\n"]
     for bid, b in BUILDINGS.items():
@@ -376,8 +398,10 @@ async def cmd_build(msg: types.Message):
         lines.append(f"{b['fa']} — سطح {c['buildings'].get(bid, 0)} ({b['desc']})\nهزینه ساخت: {cost}")
         kb.button(text=f"ساخت {b['fa']}", callback_data=f"build:{bid}")
     kb.adjust(1)
+    if back:
+        kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
     kb.button(text="✖️ بستن", callback_data="close")
-    await msg.answer("\n".join(lines), reply_markup=kb.as_markup())
+    return "\n".join(lines), kb.as_markup()
 
 @dp.callback_query(F.data.startswith("build:"))
 async def build_cb(cb: types.CallbackQuery):
@@ -408,6 +432,11 @@ async def cmd_research(msg: types.Message):
     if not await gate(msg): return
     c = await my_country(msg)
     if not c: return
+    text, kb = research_view(c)
+    sent = await msg.answer(text, reply_markup=kb)
+    await track_menu(sent, msg.from_user.id)
+
+def research_view(c: dict, back: bool = False):
     lines = [f"🔬 امتیاز تحقیق: {c['rp']}\n"]
     if c.get("researching"):
         r = RESEARCH[c["researching"]["id"]]
@@ -432,8 +461,10 @@ async def cmd_research(msg: types.Message):
                 lines.append(f"• {r['fa']} — {r['desc']} | هزینه {r['cost']} امتیاز{mc_txt}، {r['hours']} ساعت")
                 kb.button(text=f"تحقیق: {r['fa']}", callback_data=f"research:start:{rid}")
     kb.adjust(1)
+    if back:
+        kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
     kb.button(text="✖️ بستن", callback_data="close")
-    await msg.answer("\n".join(lines), reply_markup=kb.as_markup())
+    return "\n".join(lines), kb.as_markup()
 
 @dp.callback_query(F.data.startswith("research:start:"))
 async def research_start(cb: types.CallbackQuery):
@@ -468,13 +499,21 @@ async def cmd_trade(msg: types.Message):
     if not await gate(msg): return
     c = await my_country(msg)
     if not c: return
+    text, kb = trade_view(c)
+    sent = await msg.answer(text, reply_markup=kb)
+    await track_menu(sent, msg.from_user.id)
+
+def trade_view(c: dict, back: bool = False):
     kb = InlineKeyboardBuilder()
     kb.button(text="📋 بازار جهانی (خرید)", callback_data="trade:list")
     kb.button(text="➕ ثبت پیشنهاد فروش", callback_data="trade:new")
     kb.adjust(1)
     fee_note = "کارمزد بازار: ۵٪ (با همسایه‌ها: بدون کارمزد در معامله مستقیم از پروفایل کشور)"
+    if back:
+        kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
     kb.button(text="✖️ بستن", callback_data="close")
-    await msg.answer(f"🛒 تجارت جهانی — حتی با بازیکن‌های خارج از گروه تو.\n{fee_note}\n💱 ترید مستقیم در گروه: روی پیام بازیکن ریپلای بزن و بنویس «ترید».", reply_markup=kb.as_markup())
+    return (f"🛒 تجارت جهانی — حتی با بازیکن‌های خارج از گروه تو.\n{fee_note}\n💱 ترید مستقیم در گروه: روی پیام بازیکن ریپلای بزن و بنویس «ترید».",
+            kb.as_markup())
 
 @dp.callback_query(F.data == "trade:list")
 async def trade_list(cb: types.CallbackQuery):
@@ -652,9 +691,11 @@ def migration_text(c: dict) -> str:
         lines.append(f"خروج امروز: −{c['mig_out_today']:,} نفر")
     return "\n".join(lines)
 
-def migration_kb(c: dict):
+def migration_kb(c: dict, back: bool = False):
     kb = InlineKeyboardBuilder()
     kb.button(text=("⛔ بستن پذیرش مهاجر" if c.get("accept_migrants", True) else "✅ باز کردن پذیرش مهاجر"), callback_data="mig:toggle")
+    if back:
+        kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
     kb.button(text="✖️ بستن", callback_data="close")
     kb.adjust(1)
     return kb.as_markup()
@@ -824,6 +865,19 @@ async def cmd_diplomacy(msg: types.Message):
     lines.append("\nبرای تعامل با یک کشور، اسم انگلیسی‌اش را با دستور زیر بفرست:\n/find <CountryName>")
     await msg.answer("\n".join(lines))
 
+async def diplo_text(c: dict) -> str:
+    lines = [f"🤝 دیپلماسی «{c['name']}»\n\nهمسایه‌ها ({len(c['neighbors'])}/۴):"]
+    for nid in c["neighbors"]:
+        n = await dbm.get_country(nid)
+        lines.append(f" • {n['name'] if n else '(حذف شده)'}")
+    if c["alliances"]:
+        lines.append("\nاتحادها:")
+        for aid in c["alliances"]:
+            a = await dbm.get_country(aid)
+            lines.append(f" • {a['name'] if a else '?'}")
+    lines.append("\nبرای تعامل با یک کشور، اسم انگلیسی‌اش را با دستور زیر بفرست:\n/find <CountryName>")
+    return "\n".join(lines)
+
 @dp.message(Command("find"))
 async def cmd_find(msg: types.Message):
     if not await gate(msg): return
@@ -946,7 +1000,28 @@ async def cmd_army(msg: types.Message):
     kb.adjust(1)
     lines.append("\nبرای اعلان جنگ، کشور هدف را با /find پیدا کن.")
     kb.button(text="✖️ بستن", callback_data="close")
-    await msg.answer("\n".join(lines), reply_markup=kb.as_markup())
+    sent = await msg.answer("\n".join(lines), reply_markup=kb.as_markup())
+    await track_menu(sent, msg.from_user.id)
+
+async def army_view(c: dict, back: bool = False):
+    lines = [f"🪖 ارتش «{c['name']}»\nسرباز: {c['soldiers']:,} | قدرت نظامی: {logic.military_power(c):,} | قدرت دفاعی: {logic.defense_power(c):,}"]
+    kb = InlineKeyboardBuilder()
+    kb.button(text="➕ سربازگیری ۱۰۰ نفر (🧱۵۰ ⛏️۲۰ 💰۱۵۰)", callback_data="army:recruit")
+    if c.get("war_id"):
+        war = await dbm.db.wars.find_one({"_id": c["war_id"]})
+        if war:
+            enemy_id = war["defender_id"] if war["attacker_id"] == c["user_id"] else war["attacker_id"]
+            enemy = await dbm.get_country(enemy_id)
+            left = max(0, war["end_ts"] - logic.now_ts())
+            my_score = war["att_score"] if war["attacker_id"] == c["user_id"] else war["def_score"]
+            lines.append(f"\n⚔️ در جنگ با «{enemy['name'] if enemy else '?'}» هستی — پایان جنگ: {left // 3600} ساعت دیگر | امتیاز جنگی تو: {my_score:,}")
+            kb.button(text="💥 عملیات نظامی امروز", callback_data="war:op")
+    kb.adjust(1)
+    lines.append("\nبرای اعلان جنگ، کشور هدف را با /find پیدا کن.")
+    if back:
+        kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
+    kb.button(text="✖️ بستن", callback_data="close")
+    return "\n".join(lines), kb.as_markup()
 
 @dp.callback_query(F.data == "army:recruit")
 async def army_recruit(cb: types.CallbackQuery):
@@ -1019,17 +1094,161 @@ async def war_op(cb: types.CallbackQuery):
     await cb.message.answer(f"💥 عملیات نظامی انجام شد: +{gain:,} امتیاز جنگی.")
     await cb.answer()
 
+
+# ---------------------------------------------------------------- glass menu, text triggers, menu ownership
+GLASS_TEXT = "🎛️ منوی اصلی — بخش موردنظرت را انتخاب کن:"
+
+def glass_kb():
+    kb = InlineKeyboardBuilder()
+    for txt, key in [("🏳️ کشور من", "country"), ("🔭 اکتشاف", "explore"),
+                     ("🏗️ ساختمان‌ها", "build"), ("🔬 تحقیق", "research"),
+                     ("🛒 تجارت", "trade"), ("🤝 دیپلماسی", "diplo"),
+                     ("⚔️ ارتش و جنگ", "army"), ("🏆 رتبه‌بندی", "top"),
+                     ("💰 درآمد و مالی", "finance"), ("🧳 مهاجرت", "migration"),
+                     ("❓ راهنما", "guide")]:
+        kb.button(text=txt, callback_data=f"menu:go:{key}")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(2, 2, 2, 2, 2, 1, 1)
+    return kb.as_markup()
+
+def back_kb():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(2)
+    return kb.as_markup()
+
+async def render_section(key: str, c: dict):
+    """(text, markup) for a main section, with a back-to-glass-menu button."""
+    if key == "country":
+        return country_view(c, back=True)
+    if key == "explore":
+        return explore_view(c, back=True)
+    if key == "build":
+        return build_view(c, back=True)
+    if key == "research":
+        return research_view(c, back=True)
+    if key == "trade":
+        return trade_view(c, back=True)
+    if key == "diplo":
+        return await diplo_text(c), back_kb()
+    if key == "army":
+        return await army_view(c, back=True)
+    if key == "top":
+        return await leaderboard_text("power"), lb_kb("power", back=True)
+    if key == "finance":
+        return finance_text(c), back_kb()
+    if key == "migration":
+        return migration_text(c), migration_kb(c, back=True)
+    if key == "guide":
+        return GUIDE_TEXT, back_kb()
+    return GLASS_TEXT, glass_kb()
+
+async def track_menu(sent, user_id: int):
+    """Remember who a menu message belongs to; the owner middleware then makes
+    its buttons work only for that player (in groups everyone sees the message,
+    but only the owner can press its buttons)."""
+    try:
+        if sent is not None:
+            await dbm.db.menu_owners.update_one(
+                {"_id": f"{sent.chat.id}:{sent.message_id}"},
+                {"$set": {"user_id": user_id}}, upsert=True)
+    except Exception:
+        log.exception("track_menu failed")
+
+async def menu_owner_mw(handler, event, data):
+    if isinstance(event, types.CallbackQuery) and event.message is not None:
+        try:
+            doc = await dbm.db.menu_owners.find_one({"_id": f"{event.message.chat.id}:{event.message.message_id}"})
+        except Exception:
+            doc = None
+        if doc and doc.get("user_id") != event.from_user.id:
+            await event.answer("🔒 این منو مال بازیکن دیگری است؛ اسم بخش را بنویس (مثل «لیدربورد») یا «منو» را بفرست تا منوی خودت باز شود.", show_alert=True)
+            return None
+    return await handler(event, data)
+
+dp.callback_query.outer_middleware(menu_owner_mw)
+
+@dp.callback_query(F.data == "menu:open")
+async def menu_open(cb: types.CallbackQuery):
+    try:
+        await cb.message.edit_text(GLASS_TEXT, reply_markup=glass_kb())
+    except Exception:
+        sent = await cb.message.answer(GLASS_TEXT, reply_markup=glass_kb())
+        await track_menu(sent, cb.from_user.id)
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("menu:go:"))
+async def menu_go(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    key = cb.data.split(":")[2]
+    if key == "explore":
+        logic.regen_charges(c); await dbm.save_country(c)
+    text, kb = await render_section(key, c)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        sent = await cb.message.answer(text, reply_markup=kb)
+        await track_menu(sent, cb.from_user.id)
+    await cb.answer()
+
+TEXT_TRIGGERS = {
+    "لیدربورد": "top", "رتبه‌بندی": "top", "رتبه بندی": "top", "leaderboard": "top", "top": "top",
+    "تجارت": "trade", "بازار": "trade", "trade": "trade",
+    "کشور من": "country", "کشور": "country", "country": "country",
+    "اکتشاف": "explore", "explore": "explore",
+    "ساختمان‌ها": "build", "ساختمان ها": "build", "ساختمان": "build", "build": "build",
+    "تحقیق": "research", "research": "research",
+    "دیپلماسی": "diplo", "diplomacy": "diplo",
+    "ارتش": "army", "جنگ": "army", "ارتش و جنگ": "army", "army": "army",
+    "درآمد": "finance", "مالی": "finance", "درآمد و مالی": "finance", "finance": "finance",
+    "مهاجرت": "migration", "migration": "migration",
+    "راهنما": "guide", "کمک": "guide",
+    "منو": "menu", "منوی اصلی": "menu", "menu": "menu",
+}
+
+@dp.message(F.text)
+async def text_trigger(msg: types.Message, state: FSMContext):
+    """Bare-word shortcuts: typing e.g. «لیدربورد» or «تجارت» (no command, no
+    emoji) opens that section as a personal glass menu. Registered before the
+    leaderboard section but after all FSM handlers, and skipped while any FSM
+    state is active, so form inputs are never stolen."""
+    if await state.get_state() is not None:
+        return
+    key = TEXT_TRIGGERS.get(msg.text.strip().lower())
+    if not key:
+        return
+    if not await gate(msg):
+        return
+    in_group = msg.chat.type != "private"
+    if key == "menu":
+        sent = await (msg.reply(GLASS_TEXT, reply_markup=glass_kb()) if in_group
+                      else msg.answer(GLASS_TEXT, reply_markup=glass_kb()))
+        await track_menu(sent, msg.from_user.id)
+        return
+    c = await my_country(msg)
+    if not c:
+        return
+    if key == "explore":
+        logic.regen_charges(c); await dbm.save_country(c)
+    text, kb = await render_section(key, c)
+    sent = await (msg.reply(text, reply_markup=kb) if in_group else msg.answer(text, reply_markup=kb))
+    await track_menu(sent, msg.from_user.id)
+
 # ---------------------------------------------------------------- leaderboard / guide / admin
 LB_MODES = {"power": "👑 قدرت ملی", "eco": "💰 امتیاز اقتصادی", "sci": "🔬 امتیاز علمی",
             "pop": "👥 جمعیت", "area": "🗺️ مساحت"}
 LB_FIELDS = {"pop": "population", "area": "area"}
 
-def lb_kb(mode: str):
+def lb_kb(mode: str, back: bool = False):
     kb = InlineKeyboardBuilder()
     for key, label in LB_MODES.items():
         kb.button(text=("✅ " if key == mode else "") + label, callback_data=f"lb:{key}")
+    if back:
+        kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
     kb.button(text="✖️ بستن", callback_data="close")
-    kb.adjust(3, 2, 1)
+    kb.adjust(3, 2, 2 if back else 1)
     return kb.as_markup()
 
 async def leaderboard_text(mode: str) -> str:
@@ -1076,7 +1295,8 @@ async def leaderboard_text(mode: str) -> str:
 @dp.message(Command("top"))
 async def cmd_top(msg: types.Message):
     if not await gate(msg): return
-    await msg.answer(await leaderboard_text("power"), reply_markup=lb_kb("power"))
+    sent = await msg.answer(await leaderboard_text("power"), reply_markup=lb_kb("power"))
+    await track_menu(sent, msg.from_user.id)
 
 @dp.callback_query(F.data.startswith("lb:"))
 async def lb_cb(cb: types.CallbackQuery):
@@ -1098,20 +1318,24 @@ async def close_main_kb(msg: types.Message):
 
 @dp.message(Command("menu"))
 async def cmd_menu(msg: types.Message):
+    # glass (inline) menu instead of the bottom reply keyboard; in groups it is
+    # sent as a reply to the user and its buttons are owner-locked
     if msg.chat.type == "private":
-        await msg.answer("منوی اصلی 👇", reply_markup=main_kb())
+        sent = await msg.answer(GLASS_TEXT, reply_markup=glass_kb())
     else:
-        # selective + reply: Telegram shows this keyboard only to this user
-        await msg.reply("منوی اصلی 👇 (فقط برای تو باز شد)", reply_markup=main_kb(selective=True))
+        sent = await msg.reply(GLASS_TEXT, reply_markup=glass_kb())
+    await track_menu(sent, msg.from_user.id)
 
 @dp.message(Command("cancel"))
 async def cmd_cancel(msg: types.Message, state: FSMContext):
     await state.clear()
-    await msg.answer("✖️ عملیات جاری لغو شد.", reply_markup=main_kb() if msg.chat.type == "private" else None)
+    await msg.answer("✖️ عملیات جاری لغو شد.", reply_markup=glass_kb() if msg.chat.type == "private" else None)
 
 @dp.message(Command("help"))
 async def cmd_help(msg: types.Message):
-    await msg.answer(GUIDE_TEXT, reply_markup=main_kb() if msg.chat.type == "private" else None)
+    sent = await msg.answer(GUIDE_TEXT, reply_markup=glass_kb() if msg.chat.type == "private" else None)
+    if msg.chat.type == "private":
+        await track_menu(sent, msg.from_user.id)
 
 @dp.message(Command("admin_reset_planet"))
 async def cmd_admin(msg: types.Message):
