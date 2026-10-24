@@ -11,6 +11,7 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.mongo import MongoStorage
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -1208,34 +1209,6 @@ TEXT_TRIGGERS = {
     "منو": "menu", "منوی اصلی": "menu", "menu": "menu",
 }
 
-@dp.message(F.text)
-async def text_trigger(msg: types.Message, state: FSMContext):
-    """Bare-word shortcuts: typing e.g. «لیدربورد» or «تجارت» (no command, no
-    emoji) opens that section as a personal glass menu. Registered before the
-    leaderboard section but after all FSM handlers, and skipped while any FSM
-    state is active, so form inputs are never stolen."""
-    if await state.get_state() is not None:
-        return
-    key = TEXT_TRIGGERS.get(msg.text.strip().lower())
-    if not key:
-        return
-    if not await gate(msg):
-        return
-    in_group = msg.chat.type != "private"
-    if key == "menu":
-        sent = await (msg.reply(GLASS_TEXT, reply_markup=glass_kb()) if in_group
-                      else msg.answer(GLASS_TEXT, reply_markup=glass_kb()))
-        await track_menu(sent, msg.from_user.id)
-        return
-    c = await my_country(msg)
-    if not c:
-        return
-    if key == "explore":
-        logic.regen_charges(c); await dbm.save_country(c)
-    text, kb = await render_section(key, c)
-    sent = await (msg.reply(text, reply_markup=kb) if in_group else msg.answer(text, reply_markup=kb))
-    await track_menu(sent, msg.from_user.id)
-
 # ---------------------------------------------------------------- leaderboard / guide / admin
 LB_MODES = {"power": "👑 قدرت ملی", "eco": "💰 امتیاز اقتصادی", "sci": "🔬 امتیاز علمی",
             "pop": "👥 جمعیت", "area": "🗺️ مساحت"}
@@ -1345,6 +1318,34 @@ async def cmd_admin(msg: types.Message):
     if len(parts) == 2 and parts[1] in PLANETS:
         res = await dbm.db.countries.delete_many({"planet": parts[1]})
         await msg.answer(f"♻️ سیاره {parts[1]} ریست شد ({res.deleted_count} کشور حذف شد).")
+
+@dp.message(F.text)
+async def text_trigger(msg: types.Message, state: FSMContext):
+    """Bare-word shortcuts (لیدربورد، تجارت، کشور من، منو...). Registered as the
+    LAST message handler and raises SkipHandler on any non-trigger text, so it
+    can never shadow a real button or command handler (an earlier placement
+    silently swallowed «بستن منو», /menu, /help and the رتبه‌بندی button)."""
+    if await state.get_state() is not None:
+        raise SkipHandler
+    key = TEXT_TRIGGERS.get(msg.text.strip().lower())
+    if not key:
+        raise SkipHandler
+    if not await gate(msg):
+        return
+    in_group = msg.chat.type != "private"
+    if key == "menu":
+        sent = await (msg.reply(GLASS_TEXT, reply_markup=glass_kb()) if in_group
+                      else msg.answer(GLASS_TEXT, reply_markup=glass_kb()))
+        await track_menu(sent, msg.from_user.id)
+        return
+    c = await my_country(msg)
+    if not c:
+        return
+    if key == "explore":
+        logic.regen_charges(c); await dbm.save_country(c)
+    text, kb = await render_section(key, c)
+    sent = await (msg.reply(text, reply_markup=kb) if in_group else msg.answer(text, reply_markup=kb))
+    await track_menu(sent, msg.from_user.id)
 
 # ---------------------------------------------------------------- minute tick (cron-job.com)
 async def notify(user_id: int, text: str):
