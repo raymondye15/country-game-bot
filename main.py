@@ -101,7 +101,7 @@ GUIDE_TEXT = (
     "• 💰 از بخش «درآمد و مالی» ببین پولت دقیقاً از کجا می‌آید و کجا می‌رود.\n"
     "• 🧳 مهاجرت: کشورهای شاد از آدم‌های بی‌کشور و مردم کشورهای ناراضی مهاجر می‌گیرند؛ با فرودگاه بین‌سیاره‌ای (ساختمان) از سیاره‌های دیگر هم می‌توانی مهاجر بگیری.\n"
     "• 👶 زاد و ولد و مرگ‌ومیر: هر ساعت در کشورت تولد و مرگ رخ می‌دهد؛ رضایت بالا و بیمارستان تولد را بیشتر و مرگ‌ومیر را کمتر می‌کند و گرسنگی مرگ‌ومیر را شدید بالا می‌برد. همه سیستم‌های زنده بازی (اقتصاد، جمعیت، رضایت، امتیاز تحقیق، مهاجرت) ساعتی کار می‌کنند؛ گزارش کامل هر روز می‌آید.\n"
-    "• 🏆 رتبه‌بندی را می‌توانی بر اساس جمعیت، مساحت یا اقتصاد مرتب کنی.\n"
+    "• 🏆 رتبه‌بندی را می‌توانی بر اساس قدرت ملی، امتیاز اقتصادی، امتیاز علمی، جمعیت یا مساحت مرتب کنی. امتیاز اقتصادی از تولید روزانه، ساختمان‌ها و معادن می‌آید (پولِ انباشته به‌تنهایی رتبه نمی‌آورد) و امتیاز علمی از تحقیقات کامل‌شده و سرعت تولید امتیاز تحقیق.\n"
 )
 
 # ---------------------------------------------------------------- registration wizard
@@ -617,6 +617,11 @@ def finance_text(c: dict) -> str:
               f"📈 تغییر جمعیت دیروز: {c.get('last_pop_delta', 0):+,} نفر",
               f"👶 تولد دیروز: +{c.get('last_births', 0):,} | ⚰️ مرگ‌ومیر دیروز: −{c.get('last_deaths', 0):,}",
               f"🧳 مهاجرت دیروز: بی‌کشور +{c.get('last_mig_pool', 0):,} | از کشورها +{mig_in_total:,} | خروج −{c.get('last_mig_out', c.get('mig_out_today', 0)):,}"]
+    eco, eb = logic.eco_score(c)
+    sci, sb = logic.sci_score(c)
+    lines += ["", f"📊 امتیاز اقتصادی: {eco:,} (تولید {eb['prod']:,} + زیرساخت {eb['infra']:,} + خزانه {eb['treasury']:,})",
+              f"🔬 امتیاز علمی: {sci:,} (تحقیقات کامل {sb['done']:,} + ظرفیت تولید تحقیق {sb['rp_day'] * 5:,})",
+              f"👑 قدرت ملی: {logic.national_power(c):,}"]
     return "\n".join(lines)
 
 @dp.message(F.text == "💰 درآمد و مالی")
@@ -1015,20 +1020,35 @@ async def war_op(cb: types.CallbackQuery):
     await cb.answer()
 
 # ---------------------------------------------------------------- leaderboard / guide / admin
-LB_MODES = {"pop": ("population", "👥 جمعیت"), "area": ("area", "🗺️ مساحت"), "money": ("money", "💰 اقتصاد")}
+LB_MODES = {"power": "👑 قدرت ملی", "eco": "💰 امتیاز اقتصادی", "sci": "🔬 امتیاز علمی",
+            "pop": "👥 جمعیت", "area": "🗺️ مساحت"}
+LB_FIELDS = {"pop": "population", "area": "area"}
 
 def lb_kb(mode: str):
     kb = InlineKeyboardBuilder()
-    for key, (_, label) in LB_MODES.items():
+    for key, label in LB_MODES.items():
         kb.button(text=("✅ " if key == mode else "") + label, callback_data=f"lb:{key}")
     kb.button(text="✖️ بستن", callback_data="close")
-    kb.adjust(3, 1)
+    kb.adjust(3, 2, 1)
     return kb.as_markup()
 
 async def leaderboard_text(mode: str) -> str:
-    field, label = LB_MODES[mode]
+    label = LB_MODES[mode]
     lines = [f"🏆 رتبه‌بندی جهانی (بر اساس {label}):"]
-    for i, c in enumerate(await dbm.top_countries(field, 10), 1):
+    if mode in LB_FIELDS:
+        rows = [(c, None) for c in await dbm.top_countries(LB_FIELDS[mode], 10)]
+    else:
+        # computed scores: fetch all alive countries and sort in Python
+        scored = []
+        for c in await dbm.all_alive_countries():
+            eco, eb = logic.eco_score(c)
+            sci, sb = logic.sci_score(c)
+            power = logic.national_power(c)
+            key = {"power": power, "eco": eco, "sci": sci}[mode]
+            scored.append((key, c, (eco, eb, sci, sb, power)))
+        scored.sort(key=lambda t: t[0], reverse=True)
+        rows = [(c, extra) for _, c, extra in scored[:10]]
+    for i, (c, extra) in enumerate(rows, 1):
         # two-line rows: in RTL chat a population figure and an area figure on
         # one line visually merge into one giant number
         if mode == "pop":
@@ -1037,10 +1057,18 @@ async def leaderboard_text(mode: str) -> str:
         elif mode == "area":
             head = f"{i}. «{c['name']}» — 🗺️ {c['area']:,} کیلومتر مربع"
             sub = f"👥 جمعیت: {c['population']:,} نفر"
-        else:
-            net = c.get("last_fin", {}).get("net_tick", 0)
-            head = f"{i}. «{c['name']}» — 💰 خزانه: {c['money']:,}"
-            sub = f"📈 خالص روزانه: {net:+,} | 👥 جمعیت: {c['population']:,} نفر"
+        elif mode == "power":
+            eco, eb, sci, sb, power = extra
+            head = f"{i}. «{c['name']}» — 👑 قدرت ملی: {power:,}"
+            sub = f"💰 اقتصادی: {eco:,} | 🔬 علمی: {sci:,} | 👥 جمعیت: {c['population']:,} نفر"
+        elif mode == "eco":
+            eco, eb, sci, sb, power = extra
+            head = f"{i}. «{c['name']}» — 💰 امتیاز اقتصادی: {eco:,}"
+            sub = f"🏭 ارزش تولید روزانه: {eb['prod_value']:,} | 🧱 زیرساخت: {eb['infra']:,} | 💰 خزانه: {c['money']:,}"
+        else:  # sci
+            eco, eb, sci, sb, power = extra
+            head = f"{i}. «{c['name']}» — 🔬 امتیاز علمی: {sci:,}"
+            sub = f"📚 تحقیقات کامل: {len(c.get('researched', []))} | ⚗️ تولید تحقیق روزانه: {sb['rp_day']} RP"
         lines += ["", head, sub]
     return "\n".join(lines)
 
@@ -1048,7 +1076,7 @@ async def leaderboard_text(mode: str) -> str:
 @dp.message(Command("top"))
 async def cmd_top(msg: types.Message):
     if not await gate(msg): return
-    await msg.answer(await leaderboard_text("pop"), reply_markup=lb_kb("pop"))
+    await msg.answer(await leaderboard_text("power"), reply_markup=lb_kb("power"))
 
 @dp.callback_query(F.data.startswith("lb:"))
 async def lb_cb(cb: types.CallbackQuery):
