@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Pure game logic operating on country dicts (no Telegram / DB imports -> unit-testable)."""
-import random, time
+import math, random, time
 from game_data import PLANETS, GOVERNMENTS, RESEARCH, BUILDINGS, RANDOM_EVENTS, RESOURCES
 
 HOUR = 3600
@@ -178,6 +178,44 @@ def production(c: dict) -> dict:
     for r, cnt in c["mines"].items():
         prod[r] = prod.get(r, 0) + cnt * 90 * mine_bonus * (1 + mod(c, "mine_prod"))
     return prod
+
+# ---------------------------------------------------------------- scores
+# Simulator-style composite scores, computed live from existing country data
+# (no stored fields, so no DB migration). Shown in the country/finance views
+# and used by the leaderboard tabs.
+RES_PRICE = {"food": 0.06, "water": 0.06, "energy": 0.08, "materials": 1.0,
+             "iron": 1.5, "titanium": 4.0, "special": 6.0}
+BUILDING_SCORE = {"farm": 10, "waterplant": 10, "powerplant": 20, "mine": 25,
+                  "factory": 30, "university": 25, "hospital": 20, "barracks": 20,
+                  "airport_inter": 100}
+
+def eco_score(c: dict):
+    """Economic score: daily production value (main weight) + infrastructure
+    + a log-scaled treasury term, so hoarding unspent cash cannot top the board.
+    Returns (total, breakdown)."""
+    prod = production(c)
+    prod_value = sum(v * RES_PRICE.get(r, 2.0) for r, v in prod.items())
+    infra = sum(BUILDING_SCORE.get(k, 10) * n for k, n in c["buildings"].items())
+    treasury = int(50 * math.log10(max(0, c["money"]) + 1))
+    parts = {"prod": int(prod_value * 0.1), "infra": infra, "treasury": treasury,
+             "prod_value": int(prod_value)}
+    return parts["prod"] + infra + treasury, parts
+
+def sci_score(c: dict):
+    """Science score: total RP cost of completed research (achievement)
+    + current daily RP generation x5 (capacity).
+    Returns (total, breakdown)."""
+    done = sum(RESEARCH[r]["cost"] for r in c.get("researched", []) if r in RESEARCH)
+    rp_day = 2 + c["buildings"].get("university", 0) * 6
+    parts = {"done": done, "rp_day": rp_day}
+    return done + rp_day * 5, parts
+
+def national_power(c: dict) -> int:
+    """Overall index: 40% economy + 25% science + population + military power.
+    Lets a small advanced country outrank a big backward one."""
+    eco, _ = eco_score(c)
+    sci, _ = sci_score(c)
+    return int(eco * 0.40 + sci * 0.25 + c["population"] / 5000 + military_power(c) / 5)
 
 def upkeep_factor(c: dict) -> float:
     """Progressive upkeep (late-game money sink): free up to 10 buildings, then
@@ -464,6 +502,7 @@ def country_text(c: dict) -> str:
         f"🏛️ حکومت: {GOVERNMENTS[c['government']]['fa']}",
         f"👥 جمعیت: {c['population']:,} | 🗺️ مساحت: {c['area']:,} کیلومتر مربع",
         f"😊 رضایت مردم: {int(round(c['happiness']))}٪ | 💰 خزانه: {c['money']:,} | 🔬 امتیاز تحقیق: {c['rp']}",
+        f"📊 امتیازها — 👑 قدرت ملی: {national_power(c):,} | 💰 اقتصادی: {eco_score(c)[0]:,} | 🔬 علمی: {sci_score(c)[0]:,}",
         f"🔭 شارژ اکتشاف: {c['explore_charges']}/{int(mods.get('explore_cap', 3))}",
         f"👶 تولد دیروز: +{c.get('last_births', 0):,} | ⚰️ مرگ‌ومیر دیروز: −{c.get('last_deaths', 0):,}",
         f"🪖 سرباز: {c['soldiers']:,} (قدرت نظامی: {military_power(c):,})",
