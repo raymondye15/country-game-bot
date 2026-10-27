@@ -169,7 +169,18 @@ BUILDINGS = {
     "university":{"fa": "🎓 دانشگاه",       "cost": {"materials": 70, "money": 500},  "upkeep": 25,  "desc": "امتیاز تحقیق روزانه"},
     "hospital":  {"fa": "🏥 بیمارستان",     "cost": {"materials": 60, "money": 400},  "upkeep": 20,  "desc": "رضایت و رشد جمعیت"},
     "barracks":  {"fa": "🪖 پادگان",        "cost": {"materials": 70, "iron": 20, "money": 350}, "upkeep": 18, "desc": "ظرفیت و قدرت ارتش"},
-    "airport_inter": {"fa": "🛸 فرودگاه بین‌سیاره‌ای", "cost": {"materials": 200, "iron": 200, "titanium": 80, "money": 6000}, "upkeep": 150, "desc": "مهاجرت از سیاره‌های دیگر"},
+    "airport_inter": {"fa": "🛸 فرودگاه بین‌سیاره‌ای", "cost": {"materials": 200, "iron": 200, "titanium": 80, "money": 6000}, "upkeep": 150, "desc": "مهاجرت و گردشگر از سیاره‌های دیگر"},
+    "hotel": {"fa": "🏨 هتل گردشگری", "cost": {"materials": 60, "money": 1200}, "upkeep": 25, "desc": "پذیرش گردشگر و درآمد از آن‌ها"},
+}
+
+# Tourism industry upgrade levels (level -> cost). Level 0 = no industry.
+# Each level: more arrivals, higher spending per tourist, bigger visitor cap.
+TOURISM_LEVELS = {
+    1: {"money": 800, "materials": 40},
+    2: {"money": 2000, "materials": 100, "iron": 40},
+    3: {"money": 4500, "materials": 180, "iron": 120},
+    4: {"money": 9000, "materials": 300, "iron": 200, "titanium": 40},
+    5: {"money": 16000, "materials": 500, "iron": 350, "titanium": 120},
 }
 
 # Research tree: id -> data. branch, cost_rp, hours, prereq, effects (flat mods merged into country mods)
