@@ -173,6 +173,43 @@ BUILDINGS = {
     "hotel": {"fa": "🏨 هتل گردشگری", "cost": {"materials": 60, "money": 1200}, "upkeep": 25, "desc": "پذیرش گردشگر و درآمد از آن‌ها"},
 }
 
+# City specializations: each city has a level (1-5) and one specialization.
+# Effects scale with the city level (applied in logic.compute_mods / rates).
+CITY_SPECS = {
+    "agri": {"fa": "🌾 کشاورزی", "desc": "هر سطح: +۴٪ تولید غذا و +۳٪ تولید آب"},
+    "industry": {"fa": "🏭 صنعتی", "desc": "هر سطح: +۵٪ تولید مصالح"},
+    "science": {"fa": "🔬 علمی", "desc": "هر سطح: +۲ امتیاز تحقیق در روز"},
+    "tourism": {"fa": "🏖️ توریستی", "desc": "هر سطح: +۱۲٪ ورودی گردشگر"},
+    "trade": {"fa": "💰 تجاری", "desc": "هر سطح: +۳٪ درآمد (اقتصاد)"},
+}
+
+def city_upgrade_cost(level: int) -> dict:
+    """Cost to upgrade a city FROM `level` to level+1."""
+    cost = {"money": 600 * level, "materials": 30 * level}
+    if level >= 2:
+        cost["iron"] = 15 * (level - 1)
+    if level >= 4:
+        cost["titanium"] = 10
+    return cost
+
+# Space program: a sequential chain of one-time projects. Costs may include
+# "rp". Effects are applied in logic (rp/day, tourism factors, special ore).
+SPACE_PROJECTS = {
+    "satellite": {"fa": "🛰️ ماهواره ارتباطی", "hours": 24, "score": 100, "rp_day": 3,
+                  "cost": {"money": 5000, "iron": 150, "titanium": 60, "rp": 80},
+                  "desc": "+۳ تحقیق در روز، +۱۵٪ ورودی گردشگر"},
+    "telescope": {"fa": "🔭 آرایه تلسکوپ فضایی", "hours": 48, "score": 150, "rp_day": 6,
+                  "cost": {"money": 9000, "iron": 200, "titanium": 120, "special": 30, "rp": 150},
+                  "desc": "+۶ تحقیق در روز"},
+    "station": {"fa": "🛸 ایستگاه فضایی", "hours": 72, "score": 300, "rp_day": 8,
+                "cost": {"money": 20000, "materials": 400, "iron": 350, "titanium": 200, "special": 80, "rp": 300},
+                "desc": "+۸ تحقیق در روز، +۳۰٪ خرج گردشگرها"},
+    "moonbase": {"fa": "🌕 پایگاه قمری", "hours": 96, "score": 500, "rp_day": 10,
+                 "cost": {"money": 45000, "materials": 800, "iron": 600, "titanium": 400, "special": 200, "rp": 600},
+                 "desc": "+۱۰ تحقیق در روز، +۶ ماده ویژه در روز از معادن ماه، +۳۰٪ ورودی گردشگر"},
+}
+SPACE_ORDER = ["satellite", "telescope", "station", "moonbase"]
+
 # Tourism industry upgrade levels (level -> cost). Level 0 = no industry.
 # Each level: more arrivals, higher spending per tourist, bigger visitor cap.
 TOURISM_LEVELS = {

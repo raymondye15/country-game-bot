@@ -20,7 +20,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db as dbm
 import logic
-from game_data import PLANETS, GOVERNMENTS, BUILDINGS, RESEARCH, RESOURCES, DIRECTIONS, TOURISM_LEVELS
+from game_data import PLANETS, GOVERNMENTS, BUILDINGS, RESEARCH, RESOURCES, DIRECTIONS, TOURISM_LEVELS, CITY_SPECS, SPACE_PROJECTS, SPACE_ORDER, city_upgrade_cost
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("gamebot")
@@ -67,6 +67,7 @@ def main_kb(selective: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🪖 ارتش و جنگ"), KeyboardButton(text="🏆 رتبه‌بندی")],
         [KeyboardButton(text="💰 درآمد و مالی"), KeyboardButton(text="🧳 مهاجرت")],
         [KeyboardButton(text="🏖️ گردشگری"), KeyboardButton(text="❓ راهنما")],
+        [KeyboardButton(text="🏙️ شهرها"), KeyboardButton(text="🚀 برنامه فضایی")],
         [KeyboardButton(text="✖️ بستن منو")],
     ])
 
@@ -103,7 +104,9 @@ GUIDE_TEXT = (
     "• 💰 از بخش «درآمد و مالی» ببین پولت دقیقاً از کجا می‌آید و کجا می‌رود.\n"
     "• 🧳 مهاجرت: کشورهای شاد از آدم‌های بی‌کشور و مردم کشورهای ناراضی مهاجر می‌گیرند؛ با فرودگاه بین‌سیاره‌ای (ساختمان) از سیاره‌های دیگر هم می‌توانی مهاجر بگیری.\n",
     "• 🏖️ گردشگری: هتل بساز، صنعت گردشگری را ارتقا بده و از گردشگرها (با فرودگاه بین‌سیاره‌ای حتی از سیاره‌های دیگر) درآمد بگیر. امتیاز گردشگری جدا حساب می‌شود و در قدرت ملی هم اثر دارد.",
-    "• 📈 بورس جهانی: همه منابع قیمت لحظه‌ای دارند که هر ساعت با عرضه/تقاضا و معاملات بازیکن‌ها تغییر می‌کند؛ از بخش تجارت می‌توانی فوری بخری و بفروشی. در ترید و بازار، اگر قیمت یک معامله خیلی بالاتر از قیمت جهانی باشد، ربات به طرف مقابل هشدار می‌دهد."
+    "• 📈 بورس جهانی: همه منابع قیمت لحظه‌ای دارند که هر ساعت با عرضه/تقاضا و معاملات بازیکن‌ها تغییر می‌کند؛ از بخش تجارت می‌توانی فوری بخری و بفروشی. در ترید و بازار، اگر قیمت یک معامله خیلی بالاتر از قیمت جهانی باشد، ربات به طرف مقابل هشدار می‌دهد.",
+    "• 🏙️ شهرها: هر شهر تا سطح ۵ ارتقا می‌گیرد و یک تخصص دارد (کشاورزی، صنعتی، علمی، توریستی یا تجاری) که اثرش با سطح شهر بیشتر می‌شود. تغییر تخصص ۴۰۰ 💰 هزینه دارد.",
+    "• 🚀 برنامه فضایی: زنجیره‌ای از پروژه‌ها (ماهواره، تلسکوپ، ایستگاه فضایی، پایگاه قمری) که به ترتیب ساخته می‌شوند؛ تحقیق روزانه، گردشگری و امتیاز علمی را بالا می‌برند و پایگاه قمری ماده ویژه تولید می‌کند."
     "• 👶 زاد و ولد و مرگ‌ومیر: هر ساعت در کشورت تولد و مرگ رخ می‌دهد؛ رضایت بالا و بیمارستان تولد را بیشتر و مرگ‌ومیر را کمتر می‌کند و گرسنگی مرگ‌ومیر را شدید بالا می‌برد. همه سیستم‌های زنده بازی (اقتصاد، جمعیت، رضایت، امتیاز تحقیق، مهاجرت) ساعتی کار می‌کنند؛ گزارش کامل هر روز می‌آید.\n"
     "• 🏆 رتبه‌بندی را می‌توانی بر اساس قدرت ملی، امتیاز اقتصادی، امتیاز علمی، جمعیت یا مساحت مرتب کنی. امتیاز اقتصادی از تولید روزانه، ساختمان‌ها و معادن می‌آید (پولِ انباشته به‌تنهایی رتبه نمی‌آورد) و امتیاز علمی از تحقیقات کامل‌شده و سرعت تولید امتیاز تحقیق.\n"
     "• 🎛️ لازم نیست دکمه‌های پایین صفحه را بزنی: اسم هر بخش را فقط بنویس (مثل «لیدربورد»، «تجارت»، «کشور من» یا «منو») تا همان بخش به صورت منوی شیشه‌ای باز شود. منوها در گروه هم فقط برای خودت کار می‌کنند.\n"
@@ -1251,10 +1254,11 @@ def glass_kb():
                      ("🛒 تجارت", "trade"), ("🤝 دیپلماسی", "diplo"),
                      ("⚔️ ارتش و جنگ", "army"), ("🏆 رتبه‌بندی", "top"),
                      ("💰 درآمد و مالی", "finance"), ("🧳 مهاجرت", "migration"),
-                     ("🏖️ گردشگری", "tourism"), ("❓ راهنما", "guide")]:
+                     ("🏖️ گردشگری", "tourism"), ("🏙️ شهرها", "cities"),
+                     ("🚀 برنامه فضایی", "space"), ("❓ راهنما", "guide")]:
         kb.button(text=txt, callback_data=f"menu:go:{key}")
     kb.button(text="✖️ بستن", callback_data="close")
-    kb.adjust(2, 2, 2, 2, 2, 2, 1)
+    kb.adjust(2, 2, 2, 2, 2, 2, 2, 2, 1)
     return kb.as_markup()
 
 def back_kb():
@@ -1278,6 +1282,10 @@ async def render_section(key: str, c: dict):
         return trade_view(c, back=True)
     if key == "tourism":
         return tourism_view(c)
+    if key == "cities":
+        return cities_view(c)
+    if key == "space":
+        return space_view(c)
     if key == "diplo":
         return await diplo_text(c), back_kb()
     if key == "army":
@@ -1353,6 +1361,8 @@ TEXT_TRIGGERS = {
     "درآمد": "finance", "مالی": "finance", "درآمد و مالی": "finance", "finance": "finance",
     "مهاجرت": "migration", "migration": "migration",
     "توریست": "tourism", "گردشگری": "tourism", "گردشگر": "tourism", "توریسم": "tourism", "tourism": "tourism",
+    "شهرها": "cities", "شهر": "cities", "cities": "cities",
+    "فضا": "space", "برنامه فضایی": "space", "ماهواره": "space", "space": "space",
     "راهنما": "guide", "کمک": "guide",
     "منو": "menu", "منوی اصلی": "menu", "menu": "menu",
 }
@@ -1423,6 +1433,206 @@ async def tour_upgrade(cb: types.CallbackQuery):
     except Exception:
         await cb.message.answer(text, reply_markup=kb)
     await cb.answer(f"⭐ صنعت گردشگری به سطح {level + 1} رسید!")
+
+
+# ---------------------------------------------------------------- cities & space
+def cost_text(cost: dict) -> str:
+    parts = []
+    for k, v in cost.items():
+        if k == "money": parts.append(f"{v:,} 💰")
+        elif k == "rp": parts.append(f"{v} RP")
+        else: parts.append(f"{RESOURCES.get(k, k)} ×{v:,}")
+    return "، ".join(parts)
+
+def can_pay(c: dict, cost: dict) -> bool:
+    if c["money"] < cost.get("money", 0) or c.get("rp", 0) < cost.get("rp", 0):
+        return False
+    return all(c["res"].get(k, 0) >= v for k, v in cost.items() if k not in ("money", "rp"))
+
+def pay_cost(c: dict, cost: dict):
+    c["money"] -= cost.get("money", 0)
+    c["rp"] = c.get("rp", 0) - cost.get("rp", 0)
+    for k, v in cost.items():
+        if k not in ("money", "rp"):
+            c["res"][k] -= v
+
+def cities_view(c: dict):
+    lines = [f"🏙️ شهرهای «{c['name']}» — برای ارتقا یا تخصص، روی هر شهر بزن:", ""]
+    kb = InlineKeyboardBuilder()
+    for i, city in enumerate(c["cities"]):
+        spec = CITY_SPECS[city["spec"]]["fa"] if city.get("spec") in CITY_SPECS else "بدون تخصص"
+        crown = "👑 " if i == 0 else ""
+        lines.append(f"{crown}«{city['name']}» — 👥 {city['pop']:,} | ⭐ سطح {city.get('level', 1)} | {spec}")
+        kb.button(text=f"{crown}{city['name']} (⭐{city.get('level', 1)})", callback_data=f"city:{i}")
+    kb.adjust(1)
+    kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(1)
+    return "\n".join(lines), kb.as_markup()
+
+def city_detail(c: dict, i: int):
+    city = c["cities"][i]
+    spec = CITY_SPECS[city["spec"]]["fa"] if city.get("spec") in CITY_SPECS else "بدون تخصص"
+    lines = [f"🏙️ «{city['name']}»{' (پایتخت 👑)' if i == 0 else ''}",
+             f"👥 جمعیت: {city['pop']:,}",
+             f"⭐ سطح: {city.get('level', 1)} از ۵",
+             f"🎯 تخصص: {spec}"]
+    if city.get("spec") in CITY_SPECS:
+        lines.append(f"اثر فعلی: {CITY_SPECS[city['spec']]['desc']} (×{city.get('level', 1)} سطح)")
+    kb = InlineKeyboardBuilder()
+    lvl = city.get("level", 1)
+    if lvl < 5:
+        cost = city_upgrade_cost(lvl)
+        lines.append(f"\n⬆️ ارتقا به سطح {lvl + 1}: {cost_text(cost)}")
+        kb.button(text=f"⬆️ ارتقا به سطح {lvl + 1}", callback_data=f"city:up:{i}")
+    else:
+        lines.append("\n⭐ این شهر در بالاترین سطح است.")
+    lines.append("\n🎯 انتخاب تخصص (اولین بار رایگان، تغییر: ۴۰۰ 💰):")
+    for key, sp in CITY_SPECS.items():
+        mark = "✅ " if city.get("spec") == key else ""
+        kb.button(text=f"{mark}{sp['fa']}", callback_data=f"city:spec:{i}:{key}")
+    kb.button(text="🔙 شهرها", callback_data="menu:go:cities")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(1, 2, 2, 1, 2)
+    return "\n".join(lines), kb.as_markup()
+
+@dp.message(F.text == "🏙️ شهرها")
+@dp.message(Command("cities"))
+async def cmd_cities(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    text, kb = cities_view(c)
+    sent = await msg.answer(text, reply_markup=kb)
+    await track_menu(sent, msg.from_user.id)
+
+@dp.callback_query(F.data.regexp(r"^city:\d+$"))
+async def city_open(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    i = int(cb.data.split(":")[1])
+    if i >= len(c["cities"]):
+        await cb.answer("شهر پیدا نشد.", show_alert=True); return
+    text, kb = city_detail(c, i)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb)
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("city:up:"))
+async def city_upgrade(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    i = int(cb.data.split(":")[2])
+    if i >= len(c["cities"]): return
+    city = c["cities"][i]
+    lvl = city.get("level", 1)
+    if lvl >= 5:
+        await cb.answer("این شهر در بالاترین سطح است.", show_alert=True); return
+    cost = city_upgrade_cost(lvl)
+    if not can_pay(c, cost):
+        await cb.answer(f"منابع کافی نداری. هزینه: {cost_text(cost)}", show_alert=True); return
+    pay_cost(c, cost)
+    city["level"] = lvl + 1
+    c["mods_cache"] = logic.compute_mods(c)
+    await dbm.save_country(c)
+    text, kb = city_detail(c, i)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await cb.answer(f"⭐ «{city['name']}» به سطح {lvl + 1} رسید!")
+
+@dp.callback_query(F.data.startswith("city:spec:"))
+async def city_spec(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    _, _, i, spec = cb.data.split(":")
+    i = int(i)
+    if i >= len(c["cities"]) or spec not in CITY_SPECS: return
+    city = c["cities"][i]
+    if city.get("spec") == spec:
+        await cb.answer("تخصص فعلی همین است."); return
+    if city.get("spec") and c["money"] < 400:
+        await cb.answer("برای تغییر تخصص ۴۰۰ 💰 لازم است.", show_alert=True); return
+    if city.get("spec"):
+        c["money"] -= 400
+    city["spec"] = spec
+    c["mods_cache"] = logic.compute_mods(c)
+    await dbm.save_country(c)
+    text, kb = city_detail(c, i)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await cb.answer(f"🎯 تخصص «{city['name']}»: {CITY_SPECS[spec]['fa']}")
+
+def space_view(c: dict):
+    sp = c.get("space", {"done": [], "building": None})
+    done = sp.get("done", [])
+    building = sp.get("building")
+    score = sum(SPACE_PROJECTS[p]["score"] for p in done if p in SPACE_PROJECTS)
+    lines = [f"🚀 برنامه فضایی «{c['name']}»",
+             f"امتیاز فضایی: {score} | تحقیق فضایی: +{logic.space_rp_day(c)} در روز", ""]
+    kb = InlineKeyboardBuilder()
+    next_found = False
+    for pid in SPACE_ORDER:
+        pr = SPACE_PROJECTS[pid]
+        if pid in done:
+            lines.append(f"✅ {pr['fa']} — ساخته شد ({pr['desc']})")
+        elif building and building["id"] == pid:
+            left = max(0, building["finish_ts"] - logic.now_ts())
+            lines.append(f"⏳ {pr['fa']} — در حال ساخت ({left // 3600} ساعت و {(left % 3600) // 60} دقیقه مانده)")
+        elif not next_found and not building:
+            next_found = True
+            lines.append(f"🔜 {pr['fa']} — {pr['desc']}")
+            lines.append(f"   هزینه: {cost_text(pr['cost'])} | زمان ساخت: {pr['hours']} ساعت")
+            kb.button(text=f"🚀 شروع ساخت {pr['fa']}", callback_data=f"space:start:{pid}")
+        else:
+            lines.append(f"🔒 {pr['fa']} — بعد از پروژه قبلی باز می‌شود")
+    if building:
+        lines.append("\n(هم‌زمان فقط یک پروژه ساخته می‌شود.)")
+    kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(1)
+    return "\n".join(lines), kb.as_markup()
+
+@dp.message(F.text == "🚀 برنامه فضایی")
+@dp.message(Command("space"))
+async def cmd_space(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    text, kb = space_view(c)
+    sent = await msg.answer(text, reply_markup=kb)
+    await track_menu(sent, msg.from_user.id)
+
+@dp.callback_query(F.data.startswith("space:start:"))
+async def space_start(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    pid = cb.data.split(":")[2]
+    sp = c.setdefault("space", {"done": [], "building": None})
+    if sp.get("building"):
+        await cb.answer("یک پروژه دیگر در حال ساخت است.", show_alert=True); return
+    done = sp.get("done", [])
+    expected = next((p for p in SPACE_ORDER if p not in done), None)
+    if pid != expected or pid not in SPACE_PROJECTS:
+        await cb.answer("این پروژه هنوز نوبتش نیست.", show_alert=True); return
+    cost = SPACE_PROJECTS[pid]["cost"]
+    if not can_pay(c, cost):
+        await cb.answer(f"منابع کافی نداری. هزینه: {cost_text(cost)}", show_alert=True); return
+    pay_cost(c, cost)
+    sp["building"] = {"id": pid, "finish_ts": logic.now_ts() + SPACE_PROJECTS[pid]["hours"] * 3600}
+    c["space"] = sp
+    await dbm.save_country(c)
+    text, kb = space_view(c)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await cb.answer(f"🚀 ساخت «{SPACE_PROJECTS[pid]['fa']}» شروع شد!")
 
 # ---------------------------------------------------------------- leaderboard / guide / admin
 LB_MODES = {"power": "👑 قدرت ملی", "eco": "💰 امتیاز اقتصادی", "sci": "🔬 امتیاز علمی",
@@ -1605,6 +1815,15 @@ async def run_tick() -> dict:
             c["researching"] = None
             stats["research_done"] += 1; changed = True
             await notify(c["user_id"], f"🔬 تحقیق «{RESEARCH[rid]['fa']}» کامل شد! اثر آن از حالا فعال است.")
+        # space project completion
+        sp = c.get("space", {})
+        if sp.get("building") and t >= sp["building"]["finish_ts"]:
+            pid = sp["building"]["id"]
+            sp.setdefault("done", []).append(pid)
+            sp["building"] = None
+            c["space"] = sp
+            stats["research_done"] += 1; changed = True
+            await notify(c["user_id"], f"🚀 پروژه فضایی «{SPACE_PROJECTS[pid]['fa']}» کامل شد! اثر آن از حالا فعال است.")
         # hourly living-sim slice: economy, births/deaths, happiness, RP, pool migration
         last_h = c.get("last_hour_ts", c.get("last_econ_ts", c.get("last_daily_ts", t)))
         if t - last_h >= 3600:

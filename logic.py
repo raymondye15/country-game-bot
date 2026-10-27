@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pure game logic operating on country dicts (no Telegram / DB imports -> unit-testable)."""
 import math, random, time
-from game_data import PLANETS, GOVERNMENTS, RESEARCH, BUILDINGS, RANDOM_EVENTS, RESOURCES, TOURISM_LEVELS
+from game_data import PLANETS, GOVERNMENTS, RESEARCH, BUILDINGS, RANDOM_EVENTS, RESOURCES, TOURISM_LEVELS, SPACE_PROJECTS
 
 HOUR = 3600
 DAY = 86400
@@ -23,8 +23,26 @@ def compute_mods(c: dict) -> dict:
     for rid in c.get("researched", []):
         if rid in RESEARCH:
             add(RESEARCH[rid]["effects"])
+    for city in c.get("cities", []):
+        spec = city.get("spec"); lvl = city.get("level", 1)
+        if spec == "agri":
+            add({"food_prod": 0.04 * lvl, "water_prod": 0.03 * lvl})
+        elif spec == "industry":
+            add({"materials_prod": 0.05 * lvl})
+        elif spec == "trade":
+            add({"economy": 0.03 * lvl})
     mods.setdefault("explore_cap", 3)
     return mods
+
+def city_levels(c: dict, spec: str) -> int:
+    """Total levels of cities with the given specialization."""
+    return sum(city.get("level", 1) for city in c.get("cities", []) if city.get("spec") == spec)
+
+def space_done(c: dict) -> list:
+    return c.get("space", {}).get("done", [])
+
+def space_rp_day(c: dict) -> int:
+    return sum(SPACE_PROJECTS[p]["rp_day"] for p in space_done(c) if p in SPACE_PROJECTS)
 
 def mod(c: dict, key: str, default=0.0):
     return compute_mods(c).get(key, default)
@@ -59,8 +77,9 @@ def new_country(user_id: int, planet: str, continent: str, government: str,
     c = {
         "user_id": user_id, "username": username,
         "name": name, "name_lower": name.lower(), "capital": capital,
-        "cities": [{"name": capital, "pop": int(pop * 0.30)}] +
-                  [{"name": s, "pop": int(pop * f)} for s, f in zip(cities, (0.18, 0.12, 0.08))],
+        "cities": [{"name": capital, "pop": int(pop * 0.30), "level": 1, "spec": None}] +
+                  [{"name": s, "pop": int(pop * f), "level": 1, "spec": None} for s, f in zip(cities, (0.18, 0.12, 0.08))],
+        "space": {"done": [], "building": None},
         "planet": planet, "continent": continent, "government": government,
         "population": pop, "area": area, "initial_area": area,
         "money": 1500, "rp": 10,
@@ -177,6 +196,8 @@ def production(c: dict) -> dict:
     }
     for r, cnt in c["mines"].items():
         prod[r] = prod.get(r, 0) + cnt * 90 * mine_bonus * (1 + mod(c, "mine_prod"))
+    if "moonbase" in space_done(c):
+        prod["special"] = prod.get("special", 0) + 6
     return prod
 
 # ---------------------------------------------------------------- scores
@@ -206,9 +227,11 @@ def sci_score(c: dict):
     + current daily RP generation x5 (capacity).
     Returns (total, breakdown)."""
     done = sum(RESEARCH[r]["cost"] for r in c.get("researched", []) if r in RESEARCH)
-    rp_day = 2 + c["buildings"].get("university", 0) * 6
-    parts = {"done": done, "rp_day": rp_day}
-    return done + rp_day * 5, parts
+    space_pts = sum(SPACE_PROJECTS[p]["score"] for p in space_done(c) if p in SPACE_PROJECTS)
+    rp_day = (2 + c["buildings"].get("university", 0) * 6
+              + city_levels(c, "science") * 2 + space_rp_day(c))
+    parts = {"done": done, "rp_day": rp_day, "space": space_pts}
+    return done + space_pts + rp_day * 5, parts
 
 def tourism_score(c: dict):
     """Tourism score: hotel infrastructure + industry level + yesterday's
@@ -228,7 +251,15 @@ def tourism_rates(c: dict) -> dict:
         return {"arrivals": 0.0, "spend": 0.0, "cap": 0, "offplanet": False}
     offplanet = c["buildings"].get("airport_inter", 0) > 0
     arrivals = hotels * 120 * (0.6 + level * 0.35) * (0.5 + c["happiness"] / 100.0)
+    arrivals *= 1 + 0.12 * city_levels(c, "tourism")
+    done = space_done(c)
+    if "satellite" in done:
+        arrivals *= 1.15
+    if "moonbase" in done:
+        arrivals *= 1.3
     spend = 0.7 * (1 + level * 0.25)
+    if "station" in done:
+        spend *= 1.3
     if offplanet:
         arrivals *= 1.6
         spend *= 1.5   # off-planet tourists are richer
@@ -349,7 +380,7 @@ def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
         c["shortage_hours"] = 0
     c["shortage_days"] = c.get("shortage_hours", 0) // 24
     # research points: hourly share of the daily 2 + 6 per university
-    rp_f = carry.get("rp", 0.0) + (2 + b.get("university", 0) * 6) * hours / 24
+    rp_f = carry.get("rp", 0.0) + (2 + b.get("university", 0) * 6 + city_levels(c, "science") * 2 + space_rp_day(c)) * hours / 24
     rp_add = int(rp_f); carry["rp"] = rp_f - rp_add
     c["rp"] += rp_add
     c["day_rp"] = c.get("day_rp", 0) + rp_add
