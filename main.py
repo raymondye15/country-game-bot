@@ -6,7 +6,7 @@ Stack: aiogram 3 + MongoDB Atlas (free) + Render web service (webhook)
 Env: BOT_TOKEN, MONGODB_URI, MONGODB_DB, WEBHOOK_BASE_URL (or RENDER_EXTERNAL_URL),
      TICK_SECRET, ADMIN_ID (optional), PORT
 """
-import os, re, asyncio, logging, hashlib
+import os, re, asyncio, logging, hashlib, random, math
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
@@ -20,7 +20,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db as dbm
 import logic
-from game_data import PLANETS, GOVERNMENTS, BUILDINGS, RESEARCH, RESOURCES, DIRECTIONS
+from game_data import PLANETS, GOVERNMENTS, BUILDINGS, RESEARCH, RESOURCES, DIRECTIONS, TOURISM_LEVELS
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("gamebot")
@@ -66,7 +66,8 @@ def main_kb(selective: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🛒 تجارت"), KeyboardButton(text="🤝 دیپلماسی")],
         [KeyboardButton(text="🪖 ارتش و جنگ"), KeyboardButton(text="🏆 رتبه‌بندی")],
         [KeyboardButton(text="💰 درآمد و مالی"), KeyboardButton(text="🧳 مهاجرت")],
-        [KeyboardButton(text="❓ راهنما"), KeyboardButton(text="✖️ بستن منو")],
+        [KeyboardButton(text="🏖️ گردشگری"), KeyboardButton(text="❓ راهنما")],
+        [KeyboardButton(text="✖️ بستن منو")],
     ])
 
 async def my_country(msg_or_cb) -> dict | None:
@@ -100,7 +101,9 @@ GUIDE_TEXT = (
     "• 🤝 همسایه شدن (۱ تا ۴ کشور) تجارت و لجستیک را ارزان و سریع می‌کند.\n"
     "• 🛒 بازار جهانی برای همه بازیکن‌هاست، حتی خارج از گروه تو. پیشنهادهای فروش بعد از ۷ روز منقضی می‌شوند و منابع فروش‌نرفته به انبارت برمی‌گردند. در گروه، برای ترید مستقیم با یک بازیکن روی پیامش ریپلای بزن و بنویس «ترید»."
     "• 💰 از بخش «درآمد و مالی» ببین پولت دقیقاً از کجا می‌آید و کجا می‌رود.\n"
-    "• 🧳 مهاجرت: کشورهای شاد از آدم‌های بی‌کشور و مردم کشورهای ناراضی مهاجر می‌گیرند؛ با فرودگاه بین‌سیاره‌ای (ساختمان) از سیاره‌های دیگر هم می‌توانی مهاجر بگیری.\n"
+    "• 🧳 مهاجرت: کشورهای شاد از آدم‌های بی‌کشور و مردم کشورهای ناراضی مهاجر می‌گیرند؛ با فرودگاه بین‌سیاره‌ای (ساختمان) از سیاره‌های دیگر هم می‌توانی مهاجر بگیری.\n",
+    "• 🏖️ گردشگری: هتل بساز، صنعت گردشگری را ارتقا بده و از گردشگرها (با فرودگاه بین‌سیاره‌ای حتی از سیاره‌های دیگر) درآمد بگیر. امتیاز گردشگری جدا حساب می‌شود و در قدرت ملی هم اثر دارد.",
+    "• 📈 بورس جهانی: همه منابع قیمت لحظه‌ای دارند که هر ساعت با عرضه/تقاضا و معاملات بازیکن‌ها تغییر می‌کند؛ از بخش تجارت می‌توانی فوری بخری و بفروشی. در ترید و بازار، اگر قیمت یک معامله خیلی بالاتر از قیمت جهانی باشد، ربات به طرف مقابل هشدار می‌دهد."
     "• 👶 زاد و ولد و مرگ‌ومیر: هر ساعت در کشورت تولد و مرگ رخ می‌دهد؛ رضایت بالا و بیمارستان تولد را بیشتر و مرگ‌ومیر را کمتر می‌کند و گرسنگی مرگ‌ومیر را شدید بالا می‌برد. همه سیستم‌های زنده بازی (اقتصاد، جمعیت، رضایت، امتیاز تحقیق، مهاجرت) ساعتی کار می‌کنند؛ گزارش کامل هر روز می‌آید.\n"
     "• 🏆 رتبه‌بندی را می‌توانی بر اساس قدرت ملی، امتیاز اقتصادی، امتیاز علمی، جمعیت یا مساحت مرتب کنی. امتیاز اقتصادی از تولید روزانه، ساختمان‌ها و معادن می‌آید (پولِ انباشته به‌تنهایی رتبه نمی‌آورد) و امتیاز علمی از تحقیقات کامل‌شده و سرعت تولید امتیاز تحقیق.\n"
     "• 🎛️ لازم نیست دکمه‌های پایین صفحه را بزنی: اسم هر بخش را فقط بنویس (مثل «لیدربورد»، «تجارت»، «کشور من» یا «منو») تا همان بخش به صورت منوی شیشه‌ای باز شود. منوها در گروه هم فقط برای خودت کار می‌کنند.\n"
@@ -506,6 +509,7 @@ async def cmd_trade(msg: types.Message):
 
 def trade_view(c: dict, back: bool = False):
     kb = InlineKeyboardBuilder()
+    kb.button(text="📈 بورس جهانی (قیمت لحظه‌ای)", callback_data="trade:fx")
     kb.button(text="📋 بازار جهانی (خرید)", callback_data="trade:list")
     kb.button(text="➕ ثبت پیشنهاد فروش", callback_data="trade:new")
     kb.adjust(1)
@@ -523,12 +527,19 @@ async def trade_list(cb: types.CallbackQuery):
     offers = [o async for o in dbm.db.trade_offers.find({"seller_id": {"$ne": c["user_id"]}, "ts": {"$gt": logic.now_ts() - 7 * logic.DAY}}).limit(15)]
     if not offers:
         await cb.message.answer("بازار خالی است؛ اولین پیشنهاد فروش را تو ثبت کن!"); await cb.answer(); return
+    mkt = await get_market()
     kb = InlineKeyboardBuilder()
     lines = ["📋 پیشنهادهای بازار جهانی:\n"]
     for o in offers:
         seller = await dbm.get_country(o["seller_id"])
         sname = seller["name"] if seller else "?"
+        unit = o["price"] / max(1, o["amount"])
+        gp = mkt["prices"].get(o["resource"], logic.RES_PRICE[o["resource"]])
         lines.append(f"• {RESOURCES[o['resource']]} × {o['amount']:,} — قیمت {o['price']:,} 💰 (فروشنده: {sname})")
+        lines.append(f"   هر واحد: {fmtp(round(unit, 3))} 💰 | قیمت جهانی: {fmtp(gp)} 💰")
+        warn = price_warn_text(o["resource"], o["price"], o["amount"], mkt["prices"])
+        if warn:
+            lines.append(f"   {warn}")
         kb.button(text=f"خرید از {sname} ({o['price']:,}💰)", callback_data=f"trade:buy:{o['_id']}")
     kb.adjust(1)
     kb.button(text="✖️ بستن", callback_data="close")
@@ -613,7 +624,137 @@ async def trade_price(msg: types.Message, state: FSMContext):
     await dbm.save_country(c)
     await dbm.db.trade_offers.insert_one({"seller_id": c["user_id"], "resource": data["resource"], "amount": data["amount"], "price": price, "ts": logic.now_ts()})
     await state.clear()
-    await msg.answer(f"✅ پیشنهاد فروش ثبت شد: {RESOURCES[data['resource']]} × {data['amount']:,} به قیمت {price:,} 💰 — در بازار جهانی برای همه قابل خرید است.")
+    mkt = await get_market()
+    warn = price_warn_text(data["resource"], price, data["amount"], mkt["prices"])
+    note = f"\n{warn}\n💡 خریدارها این هشدار را می‌بینند؛ قیمت نزدیک به قیمت جهانی زودتر فروش می‌رود." if warn.startswith("⚠️") else (f"\n{warn}" if warn else "")
+    await msg.answer(f"✅ پیشنهاد فروش ثبت شد: {RESOURCES[data['resource']]} × {data['amount']:,} به قیمت {price:,} 💰 — در بازار جهانی برای همه قابل خرید است.{note}")
+
+
+# ------------------------------------------------- global market (exchange)
+def fmtp(x: float) -> str:
+    """Compact price formatting (bulk resources trade at fractional prices)."""
+    return f"{x:g}"
+
+def price_warn_text(resource: str, total_price: int, amount: int, prices: dict) -> str:
+    """Warn when a trade's unit price is far from the global market price."""
+    if amount <= 0 or total_price <= 0:
+        return ""
+    unit = total_price / amount
+    gp = prices.get(resource, logic.RES_PRICE[resource])
+    if unit >= gp * 1.3:
+        pct = int((unit / gp - 1) * 100)
+        return (f"⚠️ هشدار قیمت! قیمت هر واحد در این معامله {fmtp(round(unit, 3))} 💰 است، "
+                f"ولی قیمت جهانی {fmtp(gp)} 💰 — یعنی ٪{pct} گران‌تر از بازار جهانی!")
+    if unit <= gp * 0.5:
+        return (f"💡 قیمت هر واحد ({fmtp(round(unit, 3))} 💰) خیلی پایین‌تر از قیمت جهانی "
+                f"({fmtp(gp)} 💰) است — این معامله به نفع خریدار است.")
+    return ""
+
+async def get_market() -> dict:
+    doc = await dbm.db.meta.find_one({"_id": "market"})
+    if not doc:
+        doc = {"_id": "market", "prices": dict(logic.RES_PRICE),
+               "prev": dict(logic.RES_PRICE), "pressure": {}, "updated": 0}
+        await dbm.db.meta.insert_one(doc)
+    for r, base in logic.RES_PRICE.items():
+        doc["prices"].setdefault(r, base); doc["prev"].setdefault(r, base)
+    return doc
+
+async def fx_view(c: dict):
+    mkt = await get_market()
+    lines = ["📈 بورس جهانی — قیمت لحظه‌ای هر واحد (💰):",
+             "قیمت‌ها هر ساعت با عرضه و تقاضا و معاملات بازیکن‌ها بالا و پایین می‌شوند.", ""]
+    kb = InlineKeyboardBuilder()
+    for r, label in RESOURCES.items():
+        price = mkt["prices"][r]; prev = mkt["prev"].get(r, price)
+        chg = ((price - prev) / prev * 100) if prev else 0.0
+        arrow = "🔺" if chg > 0.05 else ("🔻" if chg < -0.05 else "➖")
+        lines.append(f"{label}: {fmtp(price)} 💰 {arrow} {chg:+.1f}٪ (موجودی تو: {c['res'].get(r, 0):,})")
+        kb.button(text=f"{label} — خرید/فروش", callback_data=f"fx:r:{r}")
+    kb.adjust(1)
+    kb.button(text="🔙 تجارت", callback_data="menu:back:trade")
+    kb.button(text="✖️ بستن", callback_data="close")
+    return "\n".join(lines), kb.as_markup()
+
+@dp.callback_query(F.data == "trade:fx")
+async def fx_open(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    text, kb = await fx_view(c)
+    await cb.message.answer(text, reply_markup=kb); await cb.answer()
+
+@dp.callback_query(F.data == "menu:back:trade")
+async def fx_back_trade(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    text, kb = trade_view(c, back=True)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb)
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("fx:r:"))
+async def fx_resource(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    r = cb.data.split(":")[2]
+    mkt = await get_market()
+    price = mkt["prices"][r]
+    kb = InlineKeyboardBuilder()
+    kb.button(text=f"🟢 خرید (هر واحد {fmtp(price)} 💰 +۲٪ کارمزد)", callback_data=f"fx:side:{r}:buy")
+    kb.button(text=f"🔴 فروش (هر واحد {fmtp(price)} 💰 −۲٪ کارمزد)", callback_data=f"fx:side:{r}:sell")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(1)
+    await cb.message.answer(f"{RESOURCES[r]} — قیمت جهانی: {fmtp(price)} 💰\nموجودی تو: {c['res'].get(r, 0):,} | خزانه: {c['money']:,} 💰\nخرید می‌کنی یا فروش؟", reply_markup=kb.as_markup())
+    await cb.answer()
+
+class Fx(StatesGroup):
+    amount = State()
+
+@dp.callback_query(F.data.startswith("fx:side:"))
+async def fx_side(cb: types.CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":")
+    await state.update_data(resource=parts[2], side=parts[3])
+    await state.set_state(Fx.amount)
+    verb = "می‌خری" if parts[3] == "buy" else "می‌فروشی"
+    await cb.message.answer(f"چه مقدار {verb}? (فقط عدد بفرست)"); await cb.answer()
+
+@dp.message(Fx.amount)
+async def fx_amount(msg: types.Message, state: FSMContext):
+    c = await my_country(msg)
+    if not c: return
+    data = await state.get_data()
+    try:
+        amount = int(msg.text.replace(",", "").strip())
+    except Exception:
+        await msg.answer("فقط عدد بفرست:"); return
+    if amount <= 0:
+        await msg.answer("مقدار باید مثبت باشد:"); return
+    r = data["resource"]
+    mkt = await get_market()
+    price = mkt["prices"][r]
+    if data["side"] == "buy":
+        cost = math.ceil(amount * price * 1.02)
+        if c["money"] < cost:
+            await msg.answer(f"پول کافی نداری: این خرید {cost:,} 💰 می‌شود ولی خزانه‌ات {c['money']:,} است. مقدار کمتری بفرست:"); return
+        c["money"] -= cost
+        c["res"][r] = c["res"].get(r, 0) + amount
+        await dbm.save_country(c)
+        await dbm.db.meta.update_one({"_id": "market"}, {"$inc": {f"pressure.{r}": amount}}, upsert=True)
+        await state.clear()
+        await msg.answer(f"✅ خرید انجام شد: {RESOURCES[r]} × {amount:,} به قیمت کل {cost:,} 💰 (قیمت واحد بورس: {fmtp(price)})")
+    else:
+        if c["res"].get(r, 0) < amount:
+            await msg.answer("این مقدار را نداری. مقدار کمتری بفرست:"); return
+        gain = int(amount * price * 0.98)
+        c["res"][r] -= amount
+        c["money"] += gain
+        c["fin_trade"] = c.get("fin_trade", 0) + gain
+        await dbm.save_country(c)
+        await dbm.db.meta.update_one({"_id": "market"}, {"$inc": {f"pressure.{r}": -amount}}, upsert=True)
+        await state.clear()
+        await msg.answer(f"✅ فروش انجام شد: {RESOURCES[r]} × {amount:,} — {gain:,} 💰 گرفتی (قیمت واحد بورس: {fmtp(price)})")
 
 # ---------------------------------------------------------------- finance & migration
 def finance_text(c: dict) -> str:
@@ -630,12 +771,13 @@ def finance_text(c: dict) -> str:
     if any(fd.values()):
         exp = int(fd.get("upkeep_buildings", 0) + fd.get("upkeep_army", 0) + fd.get("civic", 0))
         lines += ["⏳ امروز تا این لحظه (تولید و درآمد ساعتی شده است):",
-                  f"• مالیات: +{int(fd.get('tax', 0)):,} | کارخانه: +{int(fd.get('factory', 0)):,} | هزینه‌ها: −{exp:,} 💰", ""]
+                  f"• مالیات: +{int(fd.get('tax', 0)):,} | کارخانه: +{int(fd.get('factory', 0)):,} | 🏖️ گردشگری: +{int(fd.get('tourism', 0)):,} | هزینه‌ها: −{exp:,} 💰", ""]
     if fin:
         lines += ["📅 آخرین روز کامل:",
                   f"• مالیات: +{fin.get('tax', 0):,} 💰",
                   f"• کارخانه‌ها: +{fin.get('factory', 0):,} 💰",
                   f"• فروش تجارت: +{fin.get('trade', 0):,} 💰",
+                  f"• گردشگری: +{fin.get('tourism', 0):,} 💰",
                   f"• نگهداری ساختمان‌ها: −{fin.get('upkeep_buildings', 0):,} 💰",
                   f"• نگهداری ارتش: −{fin.get('upkeep_army', 0):,} 💰",
                   f"• خدمات شهری: −{fin.get('civic', 0):,} 💰",
@@ -792,7 +934,10 @@ async def dt_price(msg: types.Message, state: FSMContext):
     kb.button(text="❌ رد", callback_data=f"dt:no:{res.inserted_id}")
     kb.adjust(2)
     price_txt = f"{price:,} 💰" if price else "رایگان (هدیه) 🎁"
-    await msg.answer(f"💱 پیشنهاد ترید برای «{other['name']}»:\n{RESOURCES[data['resource']]} × {data['amount']:,} در برابر {price_txt}\nفروشنده: «{me['name']}» — فقط خودِ خریدار می‌تواند قبول یا رد کند. (اعتبار پیشنهاد: ۴۸ ساعت)", reply_markup=kb.as_markup())
+    mkt = await get_market()
+    warn = price_warn_text(data["resource"], price, data["amount"], mkt["prices"])
+    warn_line = f"\n{warn}" if warn else ""
+    await msg.answer(f"💱 پیشنهاد ترید برای «{other['name']}»:\n{RESOURCES[data['resource']]} × {data['amount']:,} در برابر {price_txt}\nفروشنده: «{me['name']}» — فقط خودِ خریدار می‌تواند قبول یا رد کند. (اعتبار پیشنهاد: ۴۸ ساعت){warn_line}", reply_markup=kb.as_markup())
 
 async def _dt_load(cb: types.CallbackQuery):
     from bson import ObjectId
@@ -1106,10 +1251,10 @@ def glass_kb():
                      ("🛒 تجارت", "trade"), ("🤝 دیپلماسی", "diplo"),
                      ("⚔️ ارتش و جنگ", "army"), ("🏆 رتبه‌بندی", "top"),
                      ("💰 درآمد و مالی", "finance"), ("🧳 مهاجرت", "migration"),
-                     ("❓ راهنما", "guide")]:
+                     ("🏖️ گردشگری", "tourism"), ("❓ راهنما", "guide")]:
         kb.button(text=txt, callback_data=f"menu:go:{key}")
     kb.button(text="✖️ بستن", callback_data="close")
-    kb.adjust(2, 2, 2, 2, 2, 1, 1)
+    kb.adjust(2, 2, 2, 2, 2, 2, 1)
     return kb.as_markup()
 
 def back_kb():
@@ -1131,6 +1276,8 @@ async def render_section(key: str, c: dict):
         return research_view(c, back=True)
     if key == "trade":
         return trade_view(c, back=True)
+    if key == "tourism":
+        return tourism_view(c)
     if key == "diplo":
         return await diplo_text(c), back_kb()
     if key == "army":
@@ -1205,13 +1352,81 @@ TEXT_TRIGGERS = {
     "ارتش": "army", "جنگ": "army", "ارتش و جنگ": "army", "army": "army",
     "درآمد": "finance", "مالی": "finance", "درآمد و مالی": "finance", "finance": "finance",
     "مهاجرت": "migration", "migration": "migration",
+    "توریست": "tourism", "گردشگری": "tourism", "گردشگر": "tourism", "توریسم": "tourism", "tourism": "tourism",
     "راهنما": "guide", "کمک": "guide",
     "منو": "menu", "منوی اصلی": "menu", "menu": "menu",
 }
 
+
+# ---------------------------------------------------------------- tourism
+def tourism_view(c: dict):
+    hotels = c["buildings"].get("hotel", 0)
+    level = c.get("tourism_level", 0)
+    tr = logic.tourism_rates(c)
+    score, parts = logic.tourism_score(c)
+    last = c.get("last_tour", {})
+    lines = [f"🏖️ گردشگری «{c['name']}»",
+             f"⭐ سطح صنعت گردشگری: {level} از ۵",
+             f"🏨 هتل‌ها: {hotels} (از بخش ساختمان‌ها بساز)",
+             f"🧳 گردشگر حاضر: {int(c.get('tourists', 0)):,} نفر (ظرفیت: {tr['cap']:,})",
+             f"📈 ورودی روزانه: حدود {int(tr['arrivals']):,} نفر | 💸 خرج هر گردشگر: {tr['spend']:.1f} 💰 در روز",
+             f"🛸 گردشگر بین‌سیاره‌ای: {'✅ فعال (ورودی ×۱٫۶ و خرج ×۱٫۵)' if tr['offplanet'] else '❌ غیرفعال — فرودگاه بین‌سیاره‌ای بساز'}",
+             f"📅 دیروز: {last.get('arrivals', 0):,} گردشگر، درآمد {last.get('income', 0):,} 💰",
+             f"🏖️ امتیاز گردشگری: {score:,} (هتل {parts['hotels']} + سطح صنعت {parts['level']} + بازدید {parts['visitors']})",
+             "",
+             "💡 رضایت مردم بالاتر = گردشگر بیشتر. هتل بیشتر = ظرفیت و ورودی بیشتر."]
+    kb = InlineKeyboardBuilder()
+    if level < 5:
+        cost = TOURISM_LEVELS[level + 1]
+        cost_txt = "، ".join([f"{v:,} 💰" if k == "money" else f"{RESOURCES.get(k, k)} ×{v:,}" for k, v in cost.items()])
+        lines.append(f"⬆️ ارتقا به سطح {level + 1}: {cost_txt}")
+        kb.button(text=f"⬆️ ارتقای صنعت گردشگری (سطح {level + 1})", callback_data="tour:up")
+    else:
+        lines.append("⭐ صنعت گردشگری در بالاترین سطح است!")
+    kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(1)
+    return "\n".join(lines), kb.as_markup()
+
+@dp.message(F.text == "🏖️ گردشگری")
+@dp.message(Command("tourism"))
+async def cmd_tourism(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    text, kb = tourism_view(c)
+    sent = await msg.answer(text, reply_markup=kb)
+    await track_menu(sent, msg.from_user.id)
+
+@dp.callback_query(F.data == "tour:up")
+async def tour_upgrade(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    level = c.get("tourism_level", 0)
+    if level >= 5:
+        await cb.answer("صنعت گردشگری در بالاترین سطح است.", show_alert=True); return
+    cost = TOURISM_LEVELS[level + 1]
+    if c["money"] < cost.get("money", 0):
+        await cb.answer("پول کافی نداری.", show_alert=True); return
+    for r, v in cost.items():
+        if r != "money" and c["res"].get(r, 0) < v:
+            await cb.answer(f"{RESOURCES.get(r, r)} کافی نداری.", show_alert=True); return
+    c["money"] -= cost.get("money", 0)
+    for r, v in cost.items():
+        if r != "money":
+            c["res"][r] -= v
+    c["tourism_level"] = level + 1
+    await dbm.save_country(c)
+    text, kb = tourism_view(c)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb)
+    await cb.answer(f"⭐ صنعت گردشگری به سطح {level + 1} رسید!")
+
 # ---------------------------------------------------------------- leaderboard / guide / admin
 LB_MODES = {"power": "👑 قدرت ملی", "eco": "💰 امتیاز اقتصادی", "sci": "🔬 امتیاز علمی",
-            "pop": "👥 جمعیت", "area": "🗺️ مساحت"}
+            "tourism": "🏖️ امتیاز گردشگری", "pop": "👥 جمعیت", "area": "🗺️ مساحت"}
 LB_FIELDS = {"pop": "population", "area": "area"}
 
 def lb_kb(mode: str, back: bool = False):
@@ -1221,7 +1436,7 @@ def lb_kb(mode: str, back: bool = False):
     if back:
         kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
     kb.button(text="✖️ بستن", callback_data="close")
-    kb.adjust(3, 2, 2 if back else 1)
+    kb.adjust(3, 3, 2 if back else 1)
     return kb.as_markup()
 
 async def leaderboard_text(mode: str) -> str:
@@ -1236,8 +1451,9 @@ async def leaderboard_text(mode: str) -> str:
             eco, eb = logic.eco_score(c)
             sci, sb = logic.sci_score(c)
             power = logic.national_power(c)
-            key = {"power": power, "eco": eco, "sci": sci}[mode]
-            scored.append((key, c, (eco, eb, sci, sb, power)))
+            tour, tb = logic.tourism_score(c)
+            key = {"power": power, "eco": eco, "sci": sci, "tourism": tour}[mode]
+            scored.append((key, c, (eco, eb, sci, sb, power, tour, tb)))
         scored.sort(key=lambda t: t[0], reverse=True)
         rows = [(c, extra) for _, c, extra in scored[:10]]
     for i, (c, extra) in enumerate(rows, 1):
@@ -1250,15 +1466,19 @@ async def leaderboard_text(mode: str) -> str:
             head = f"{i}. «{c['name']}» — 🗺️ {c['area']:,} کیلومتر مربع"
             sub = f"👥 جمعیت: {c['population']:,} نفر"
         elif mode == "power":
-            eco, eb, sci, sb, power = extra
+            eco, eb, sci, sb, power = extra[:5]
             head = f"{i}. «{c['name']}» — 👑 قدرت ملی: {power:,}"
             sub = f"💰 اقتصادی: {eco:,} | 🔬 علمی: {sci:,} | 👥 جمعیت: {c['population']:,} نفر"
         elif mode == "eco":
-            eco, eb, sci, sb, power = extra
+            eco, eb, sci, sb, power = extra[:5]
             head = f"{i}. «{c['name']}» — 💰 امتیاز اقتصادی: {eco:,}"
             sub = f"🏭 ارزش تولید روزانه: {eb['prod_value']:,} | 🧱 زیرساخت: {eb['infra']:,} | 💰 خزانه: {c['money']:,}"
+        elif mode == "tourism":
+            tour, tb = extra[5], extra[6]
+            head = f"{i}. «{c['name']}» — 🏖️ امتیاز گردشگری: {tour:,}"
+            sub = f"🏨 هتل: {c['buildings'].get('hotel', 0)} | ⭐ سطح صنعت: {c.get('tourism_level', 0)} | 🧳 گردشگر دیروز: {c.get('last_tour', {}).get('arrivals', 0):,} نفر"
         else:  # sci
-            eco, eb, sci, sb, power = extra
+            eco, eb, sci, sb, power = extra[:5]
             head = f"{i}. «{c['name']}» — 🔬 امتیاز علمی: {sci:,}"
             sub = f"📚 تحقیقات کامل: {len(c.get('researched', []))} | ⚗️ تولید تحقیق روزانه: {sb['rp_day']} RP"
         lines += ["", head, sub]
@@ -1358,6 +1578,17 @@ async def run_tick() -> dict:
     """Called every 1 minute by cron-job.com. Drives ALL game timers."""
     t = logic.now_ts()
     stats = {"charges": 0, "research_done": 0, "daily": 0, "wars_resolved": 0, "collapsed": 0, "frozen": 0, "offers_expired": 0, "migrants": 0}
+    # global market prices: one step per hour (supply/demand + mean reversion)
+    mkt = await get_market()
+    if t - mkt.get("updated", 0) >= 3600:
+        rng = random.Random(t // 3600)
+        pressure = mkt.get("pressure", {})
+        new_prices = {r: round(logic.next_market_price(mkt["prices"].get(r, base), base,
+                                                       pressure.get(r, 0), rng), 4)
+                      for r, base in logic.RES_PRICE.items()}
+        await dbm.db.meta.update_one({"_id": "market"},
+            {"$set": {"prev": mkt["prices"], "prices": new_prices, "pressure": {}, "updated": t}},
+            upsert=True)
     countries = await dbm.all_alive_countries()
     for c in countries:
         changed = False
