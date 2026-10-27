@@ -20,7 +20,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db as dbm
 import logic
-from game_data import PLANETS, GOVERNMENTS, BUILDINGS, RESEARCH, RESOURCES, DIRECTIONS, TOURISM_LEVELS, CITY_SPECS, SPACE_PROJECTS, SPACE_ORDER, city_upgrade_cost
+from game_data import PLANETS, GOVERNMENTS, BUILDINGS, RESEARCH, RESOURCES, DIRECTIONS, TOURISM_LEVELS, CITY_SPECS, SPACE_PROJECTS, SPACE_ORDER, city_upgrade_cost, LAWS
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("gamebot")
@@ -68,7 +68,7 @@ def main_kb(selective: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="💰 درآمد و مالی"), KeyboardButton(text="🧳 مهاجرت")],
         [KeyboardButton(text="🏖️ گردشگری"), KeyboardButton(text="❓ راهنما")],
         [KeyboardButton(text="🏙️ شهرها"), KeyboardButton(text="🚀 برنامه فضایی")],
-        [KeyboardButton(text="✖️ بستن منو")],
+        [KeyboardButton(text="🗳️ شورای بین‌سیاره‌ای"), KeyboardButton(text="✖️ بستن منو")],
     ])
 
 async def my_country(msg_or_cb) -> dict | None:
@@ -106,7 +106,8 @@ GUIDE_TEXT = (
     "• 🏖️ گردشگری: هتل بساز، صنعت گردشگری را ارتقا بده و از گردشگرها (با فرودگاه بین‌سیاره‌ای حتی از سیاره‌های دیگر) درآمد بگیر. امتیاز گردشگری جدا حساب می‌شود و در قدرت ملی هم اثر دارد.",
     "• 📈 بورس جهانی: همه منابع قیمت لحظه‌ای دارند که هر ساعت با عرضه/تقاضا و معاملات بازیکن‌ها تغییر می‌کند؛ از بخش تجارت می‌توانی فوری بخری و بفروشی. در ترید و بازار، اگر قیمت یک معامله خیلی بالاتر از قیمت جهانی باشد، ربات به طرف مقابل هشدار می‌دهد.",
     "• 🏙️ شهرها: هر شهر تا سطح ۵ ارتقا می‌گیرد و یک تخصص دارد (کشاورزی، صنعتی، علمی، توریستی یا تجاری) که اثرش با سطح شهر بیشتر می‌شود. تغییر تخصص ۴۰۰ 💰 هزینه دارد.",
-    "• 🚀 برنامه فضایی: زنجیره‌ای از پروژه‌ها (ماهواره، تلسکوپ، ایستگاه فضایی، پایگاه قمری) که به ترتیب ساخته می‌شوند؛ تحقیق روزانه، گردشگری و امتیاز علمی را بالا می‌برند و پایگاه قمری ماده ویژه تولید می‌کند."
+    "• 🚀 برنامه فضایی: زنجیره‌ای از پروژه‌ها (ماهواره، تلسکوپ، ایستگاه فضایی، پایگاه قمری) که به ترتیب ساخته می‌شوند؛ تحقیق روزانه، گردشگری و امتیاز علمی را بالا می‌برند و پایگاه قمری ماده ویژه تولید می‌کند.",
+    "• 🗳️ شورای بین‌سیاره‌ای (IC): هر دوره از بین ۴ قانون نامزد رأی می‌دهی؛ قانون برنده تا دوره بعد روی همه کشورها اعمال می‌شود (صلح، رونق گردشگری، بازار آزاد و...). هر کشور یک رأی دارد و می‌توانی رأیت را عوض کنی."
     "• 👶 زاد و ولد و مرگ‌ومیر: هر ساعت در کشورت تولد و مرگ رخ می‌دهد؛ رضایت بالا و بیمارستان تولد را بیشتر و مرگ‌ومیر را کمتر می‌کند و گرسنگی مرگ‌ومیر را شدید بالا می‌برد. همه سیستم‌های زنده بازی (اقتصاد، جمعیت، رضایت، امتیاز تحقیق، مهاجرت) ساعتی کار می‌کنند؛ گزارش کامل هر روز می‌آید.\n"
     "• 🏆 رتبه‌بندی را می‌توانی بر اساس قدرت ملی، امتیاز اقتصادی، امتیاز علمی، جمعیت یا مساحت مرتب کنی. امتیاز اقتصادی از تولید روزانه، ساختمان‌ها و معادن می‌آید (پولِ انباشته به‌تنهایی رتبه نمی‌آورد) و امتیاز علمی از تحقیقات کامل‌شده و سرعت تولید امتیاز تحقیق.\n"
     "• 🎛️ لازم نیست دکمه‌های پایین صفحه را بزنی: اسم هر بخش را فقط بنویس (مثل «لیدربورد»، «تجارت»، «کشور من» یا «منو») تا همان بخش به صورت منوی شیشه‌ای باز شود. منوها در گروه هم فقط برای خودت کار می‌کنند.\n"
@@ -579,7 +580,7 @@ async def trade_buy(cb: types.CallbackQuery):
     seller = await dbm.get_country(offer["seller_id"])
     if not seller or not seller.get("alive"):
         await dbm.db.trade_offers.delete_one({"_id": oid}); await cb.answer("فروشنده دیگر فعال نیست.", show_alert=True); return
-    fee = 0 if seller["user_id"] in c["neighbors"] else int(offer["price"] * 0.05)
+    fee = 0 if (seller["user_id"] in c["neighbors"] or await council_active() == "free_market") else int(offer["price"] * 0.05)
     total = offer["price"] + fee
     if c["money"] < total:
         await cb.answer(f"پول کافی نداری ({c['money']:,}/{total:,})", show_alert=True); return
@@ -753,8 +754,9 @@ async def fx_amount(msg: types.Message, state: FSMContext):
     r = data["resource"]
     mkt = await get_market()
     price = mkt["prices"][r]
+    fee_rate = 0.0 if await council_active() == "free_market" else 0.02
     if data["side"] == "buy":
-        cost = math.ceil(amount * price * 1.02)
+        cost = math.ceil(amount * price * (1 + fee_rate))
         if c["money"] < cost:
             await msg.answer(f"پول کافی نداری: این خرید {cost:,} 💰 می‌شود ولی خزانه‌ات {c['money']:,} است. مقدار کمتری بفرست:"); return
         c["money"] -= cost
@@ -766,7 +768,7 @@ async def fx_amount(msg: types.Message, state: FSMContext):
     else:
         if c["res"].get(r, 0) < amount:
             await msg.answer("این مقدار را نداری. مقدار کمتری بفرست:"); return
-        gain = int(amount * price * 0.98)
+        gain = int(amount * price * (1 - fee_rate))
         c["res"][r] -= amount
         c["money"] += gain
         c["fin_trade"] = c.get("fin_trade", 0) + gain
@@ -1205,6 +1207,8 @@ async def army_recruit(cb: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("war:declare:"))
 async def war_declare(cb: types.CallbackQuery):
+    if await council_active() == "peace":
+        await cb.answer("🕊️ قانون «صلح کهکشانی» شورای بین‌سیاره‌ای فعال است؛ اعلان جنگ جدید ممنوع است.", show_alert=True); return
     c = await my_country(cb)
     if not c: return
     tid = int(cb.data.split(":")[2])
@@ -1271,10 +1275,11 @@ def glass_kb():
                      ("⚔️ ارتش و جنگ", "army"), ("🏆 رتبه‌بندی", "top"),
                      ("💰 درآمد و مالی", "finance"), ("🧳 مهاجرت", "migration"),
                      ("🏖️ گردشگری", "tourism"), ("🏙️ شهرها", "cities"),
-                     ("🚀 برنامه فضایی", "space"), ("❓ راهنما", "guide")]:
+                     ("🚀 برنامه فضایی", "space"), ("🗳️ شورای بین‌سیاره‌ای", "council"),
+                     ("❓ راهنما", "guide")]:
         kb.button(text=txt, callback_data=f"menu:go:{key}")
     kb.button(text="✖️ بستن", callback_data="close")
-    kb.adjust(2, 2, 2, 2, 2, 2, 2, 2, 1)
+    kb.adjust(2, 2, 2, 2, 2, 2, 2, 2, 2, 1)
     return kb.as_markup()
 
 def back_kb():
@@ -1302,6 +1307,8 @@ async def render_section(key: str, c: dict):
         return cities_view(c)
     if key == "space":
         return space_view(c)
+    if key == "council":
+        return await council_view(c)
     if key == "diplo":
         return await diplo_text(c), back_kb()
     if key == "army":
@@ -1379,6 +1386,7 @@ TEXT_TRIGGERS = {
     "توریست": "tourism", "گردشگری": "tourism", "گردشگر": "tourism", "توریسم": "tourism", "tourism": "tourism",
     "شهرها": "cities", "شهر": "cities", "cities": "cities",
     "فضا": "space", "برنامه فضایی": "space", "ماهواره": "space", "space": "space",
+    "شورا": "council", "شورای بین‌سیاره‌ای": "council", "رأی": "council", "رأی‌گیری": "council", "قانون": "council", "council": "council", "vote": "council",
     "راهنما": "guide", "کمک": "guide",
     "منو": "menu", "منوی اصلی": "menu", "menu": "menu",
 }
@@ -1650,6 +1658,83 @@ async def space_start(cb: types.CallbackQuery):
         pass
     await cb.answer(f"🚀 ساخت «{SPACE_PROJECTS[pid]['fa']}» شروع شد!")
 
+
+# ---------------------------------------------------------------- Interplanetary Council (IC)
+async def get_council() -> dict:
+    doc = await dbm.db.meta.find_one({"_id": "council"})
+    if not doc:
+        doc = {"_id": "council", "term": 1, "term_start": logic.now_ts(),
+               "active": None, "votes": {}, "last_result": None,
+               "candidates": random.Random(1).sample(list(LAWS), 4)}
+        await dbm.db.meta.insert_one(doc)
+    return doc
+
+async def council_active():
+    doc = await dbm.db.meta.find_one({"_id": "council"}, {"active": 1})
+    return doc.get("active") if doc else None
+
+async def council_view(c: dict):
+    doc = await get_council()
+    tally = {}
+    for v in doc.get("votes", {}).values():
+        tally[v] = tally.get(v, 0) + 1
+    total = sum(tally.values())
+    term_len = 2 * logic.DAY if doc["term"] == 1 else 7 * logic.DAY
+    left = max(0, doc["term_start"] + term_len - logic.now_ts())
+    left_txt = f"{left // logic.DAY} روز و {(left % logic.DAY) // 3600} ساعت"
+    lines = ["🗳️ شورای بین‌سیاره‌ای — Interplanetary Council (IC)",
+             "هر کشور یک رأی دارد؛ قانون برنده تا پایان دوره بعد روی همه کشورها اعمال می‌شود.", ""]
+    if doc.get("active"):
+        a = LAWS[doc["active"]]
+        lines += [f"⚖️ قانون فعال فعلی: {a['fa']}", f"   {a['desc']}", ""]
+    else:
+        lines += ["⚖️ فعلاً هیچ قانونی فعال نیست (دوره اول است).", ""]
+    my_vote = doc.get("votes", {}).get(str(c["user_id"]))
+    lines.append(f"📋 رأی‌گیری دوره {doc['term']} — پایان رأی‌گیری و اعلام قانون جدید: {left_txt} دیگر")
+    if my_vote:
+        lines.append(f"رأی فعلی تو: {LAWS[my_vote]['fa']} (با زدن روی گزینه دیگر عوض می‌شود)")
+    kb = InlineKeyboardBuilder()
+    for law_id in doc["candidates"]:
+        n = tally.get(law_id, 0)
+        pct = int(n / total * 100) if total else 0
+        bar = "▓" * (pct // 10) + "░" * (10 - pct // 10)
+        mark = "✅ " if my_vote == law_id else ""
+        lines.append(f"\n{mark}{LAWS[law_id]['fa']} — {n} رأی ({pct}٪) {bar}")
+        lines.append(f"   {LAWS[law_id]['desc']}")
+        kb.button(text=f"{mark}رأی به {LAWS[law_id]['fa']}", callback_data=f"council:vote:{law_id}")
+    if total == 0:
+        lines.append("\nهنوز کسی رأی نداده است؛ اولین نفر باش!")
+    kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(1)
+    return "\n".join(lines), kb.as_markup()
+
+@dp.message(F.text == "🗳️ شورای بین‌سیاره‌ای")
+@dp.message(Command("council"))
+async def cmd_council(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    text, kb = await council_view(c)
+    sent = await msg.answer(text, reply_markup=kb)
+    await track_menu(sent, msg.from_user.id)
+
+@dp.callback_query(F.data.startswith("council:vote:"))
+async def council_vote(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    law_id = cb.data.split(":")[2]
+    doc = await get_council()
+    if law_id not in doc["candidates"]:
+        await cb.answer("این قانون در این دوره نامزد نیست.", show_alert=True); return
+    await dbm.db.meta.update_one({"_id": "council"}, {"$set": {f"votes.{c['user_id']}": law_id}})
+    text, kb = await council_view(c)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb)
+    await cb.answer(f"🗳️ رأی تو ثبت شد: {LAWS[law_id]['fa']}")
+
 # ---------------------------------------------------------------- leaderboard / guide / admin
 LB_MODES = {"power": "👑 قدرت ملی", "eco": "💰 امتیاز اقتصادی", "sci": "🔬 امتیاز علمی",
             "tourism": "🏖️ امتیاز گردشگری", "pop": "👥 جمعیت", "area": "🗺️ مساحت"}
@@ -1804,6 +1889,34 @@ async def run_tick() -> dict:
     """Called every 1 minute by cron-job.com. Drives ALL game timers."""
     t = logic.now_ts()
     stats = {"charges": 0, "research_done": 0, "daily": 0, "wars_resolved": 0, "collapsed": 0, "frozen": 0, "offers_expired": 0, "migrants": 0}
+    # Interplanetary Council: term rollover (count votes, enact the winner)
+    council = await get_council()
+    term_len = 2 * logic.DAY if council["term"] == 1 else 7 * logic.DAY
+    if t - council["term_start"] >= term_len:
+        tally = {}
+        for v in council.get("votes", {}).values():
+            tally[v] = tally.get(v, 0) + 1
+        winner = None
+        if tally:
+            top = max(tally.values())
+            winner = random.Random(t).choice([k for k, n in tally.items() if n == top])
+        council["last_result"] = {"winner": winner, "tally": tally, "term": council["term"]}
+        council["active"] = winner
+        council["term"] += 1
+        council["term_start"] = t
+        council["votes"] = {}
+        pool = [k for k in LAWS if k != winner]
+        council["candidates"] = random.Random(council["term"]).sample(pool, 4)
+        await dbm.db.meta.update_one({"_id": "council"},
+            {"$set": {k: v for k, v in council.items() if k != "_id"}}, upsert=True)
+        if winner:
+            board = "\n".join(f"• {LAWS[k]['fa']}: {n} رأی" for k, n in sorted(tally.items(), key=lambda x: -x[1]))
+            msg = (f"🗳️ شورای بین‌سیاره‌ای (IC): دوره {council['last_result']['term']} تمام شد.\n"
+                   f"✅ قانون جدید تصویب شد: {LAWS[winner]['fa']}\n{LAWS[winner]['desc']}\n\n📊 آرای دوره:\n{board}\n\nقانون تا پایان دوره بعد فعال است؛ رأی‌گیری دوره جدید شروع شد!")
+        else:
+            msg = "🗳️ شورای بین‌سیاره‌ای (IC): دوره قبل بدون رأی تمام شد و هیچ قانونی تصویب نشد. رأی‌گیری دوره جدید شروع شده — رأی بده!"
+        for oc in await dbm.all_alive_countries():
+            await notify(oc["user_id"], msg)
     # global market prices: one step per hour (supply/demand + mean reversion)
     mkt = await get_market()
     if t - mkt.get("updated", 0) >= 3600:
@@ -1816,8 +1929,11 @@ async def run_tick() -> dict:
             {"$set": {"prev": mkt["prices"], "prices": new_prices, "pressure": {}, "updated": t}},
             upsert=True)
     countries = await dbm.all_alive_countries()
+    _council0 = await get_council()
     for c in countries:
         changed = False
+        if c.get("active_law") != _council0.get("active"):
+            c["active_law"] = _council0.get("active"); changed = True
         # inactivity freeze flag (14 days)
         if t - c.get("last_seen_ts", t) > 14 * logic.DAY and not c.get("frozen"):
             c["frozen"] = True; changed = True; stats["frozen"] += 1

@@ -44,6 +44,10 @@ def space_done(c: dict) -> list:
 def space_rp_day(c: dict) -> int:
     return sum(SPACE_PROJECTS[p]["rp_day"] for p in space_done(c) if p in SPACE_PROJECTS)
 
+def law(c: dict):
+    """The Interplanetary Council law currently in force for this country."""
+    return c.get("active_law")
+
 def mod(c: dict, key: str, default=0.0):
     return compute_mods(c).get(key, default)
 
@@ -226,8 +230,11 @@ def production(c: dict) -> dict:
         "materials": (150 + b.get("factory", 0) * 220) * (1 + mod(c, "materials_prod")),
         "iron": 0, "titanium": 0, "special": 0,
     }
+    mine_factor = 1.4 if law(c) == "mining_rush" else 1.0
     for r, cnt in c["mines"].items():
-        prod[r] = prod.get(r, 0) + cnt * 90 * mine_bonus * (1 + mod(c, "mine_prod"))
+        prod[r] = prod.get(r, 0) + cnt * 90 * mine_bonus * (1 + mod(c, "mine_prod")) * mine_factor
+    if law(c) == "food_program":
+        prod["food"] *= 1.25
     if "moonbase" in space_done(c):
         prod["special"] = prod.get("special", 0) + 6
     return prod
@@ -284,6 +291,8 @@ def tourism_rates(c: dict) -> dict:
     offplanet = c["buildings"].get("airport_inter", 0) > 0
     arrivals = hotels * 120 * (0.6 + level * 0.35) * (0.5 + c["happiness"] / 100.0)
     arrivals *= 1 + 0.12 * city_levels(c, "tourism")
+    if law(c) == "tourism_boom":
+        arrivals *= 1.5
     done = space_done(c)
     if "satellite" in done:
         arrivals *= 1.15
@@ -384,6 +393,8 @@ def econ_tick(c: dict, frac: float = 1.0):
     ua = c.get("soldiers", 0) * 0.15
     civic = c["population"] * 0.0008
     factory_income = b.get("factory", 0) * 120
+    if law(c) == "industrial_boom":
+        factory_income = int(factory_income * 1.5)
     net = (income + factory_income - ub - ua - civic) * frac
     cm = carry.get("__money__", 0.0) + net
     whole = int(cm) if cm >= 0 else -int(-cm)
@@ -412,7 +423,10 @@ def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
         c["shortage_hours"] = 0
     c["shortage_days"] = c.get("shortage_hours", 0) // 24
     # research points: hourly share of the daily 2 + 6 per university
-    rp_f = carry.get("rp", 0.0) + (2 + b.get("university", 0) * 6 + city_levels(c, "science") * 2 + space_rp_day(c)) * hours / 24
+    rp_rate = 2 + b.get("university", 0) * 6 + city_levels(c, "science") * 2 + space_rp_day(c)
+    if law(c) == "science_week":
+        rp_rate = int(rp_rate * 1.5)
+    rp_f = carry.get("rp", 0.0) + rp_rate * hours / 24
     rp_add = int(rp_f); carry["rp"] = rp_f - rp_add
     c["rp"] += rp_add
     c["day_rp"] = c.get("day_rp", 0) + rp_add
@@ -459,6 +473,8 @@ def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
         headroom = int(capacity(c) * 1.1 - c["population"])
         if attract > 0 and headroom > 0:
             mig = min(int(c["population"] * 0.0015 * attract * hours / 24), headroom)
+            if law(c) == "open_borders":
+                mig = min(mig * 2, headroom)
             if mig > 0:
                 c["population"] += mig
                 adjust_cities(c, mig)

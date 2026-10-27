@@ -173,6 +173,20 @@ BUILDINGS = {
     "hotel": {"fa": "🏨 هتل گردشگری", "cost": {"materials": 60, "money": 1200}, "upkeep": 25, "desc": "پذیرش گردشگر و درآمد از آن‌ها"},
 }
 
+# Interplanetary Council (IC) laws: players vote each term; the winning law
+# applies to EVERY country until the next term. Effects live in logic.py
+# (via c["active_law"]) and in main.py (market fees, war declarations).
+LAWS = {
+    "peace": {"fa": "🕊️ صلح کهکشانی", "desc": "در مدت این قانون هیچ کشوری نمی‌تواند اعلان جنگ جدید بدهد."},
+    "tourism_boom": {"fa": "🎪 رونق گردشگری", "desc": "ورودی گردشگر همه کشورها +۵۰٪."},
+    "free_market": {"fa": "🆓 بازار آزاد", "desc": "کارمزد بورس و بازار جهانی صفر می‌شود."},
+    "food_program": {"fa": "🌾 برنامه غذایی اضطراری", "desc": "تولید غذای همه کشورها +۲۵٪."},
+    "science_week": {"fa": "🔬 هفته علم کهکشانی", "desc": "تولید امتیاز تحقیق همه کشورها +۵۰٪."},
+    "mining_rush": {"fa": "⛏️ استخراج فشرده", "desc": "برداشت همه معدن‌ها +۴۰٪."},
+    "open_borders": {"fa": "🧳 درهای باز", "desc": "مهاجرت به کشورهای شاد دو برابر می‌شود."},
+    "industrial_boom": {"fa": "🏭 رونق صنعتی", "desc": "درآمد کارخانه‌های همه کشورها +۵۰٪."},
+}
+
 # City specializations: each city has a level (1-5) and one specialization.
 # Effects scale with the city level (applied in logic.compute_mods / rates).
 CITY_SPECS = {
