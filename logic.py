@@ -64,6 +64,13 @@ def new_country(user_id: int, planet: str, continent: str, government: str,
     for _ in range(random.randint(3, 5)):
         r = random.choices(pool, weights=wts)[0]
         mines[r] = mines.get(r, 0) + 1
+    if mines.get("iron", 0) == 0 and mines:
+        # iron is essential (buildings/upgrades): guarantee a starting iron mine
+        donor = max(mines, key=lambda k: mines[k])
+        mines[donor] -= 1
+        if mines[donor] == 0:
+            del mines[donor]
+        mines["iron"] = 1
     terrains = cont["terrains"]
     borders = {}
     dirs = ["north", "east", "south", "west"]
@@ -140,6 +147,8 @@ def do_exploration(c: dict, direction: str, other_countries: list) -> dict:
     c["money"] -= EXPLORE_COST["money"]
     c["res"]["energy"] -= EXPLORE_COST["energy"]
     c["res"]["food"] -= EXPLORE_COST["food"]
+    focus = c.get("explore_focus") == "mine"
+    mine_chance = mine_chance_now(c)
     terrains = PLANETS[c["planet"]]["continents"][c["continent"]]["terrains"]
     def rotate_terrain():
         # the frontier moves: the NEXT stretch of land in this direction gets a
@@ -155,25 +164,48 @@ def do_exploration(c: dict, direction: str, other_countries: list) -> dict:
         return {"ok": True, "kind": "country", "other": other,
                 "msg": f"تیم اکتشاف به مرز کشور «{other['name']}» رسید! این جهت بسته شد؛ می‌توانی از بخش دیپلماسی درخواست همسایگی بفرستی."}
     gain = exploration_gain(c)
+    if focus:
+        gain //= 2  # mine-focused survey takes less land but finds mines far more often
+    def pity_note() -> str:
+        m = c.get("mine_misses", 0)
+        if m >= 3:
+            return (f"\n🔍 تیم زمین‌شناسی: {m} اکتشاف پیاپی بدون معدن — شانس کشف معدن "
+                    f"بالا رفته است (الان ٪{int(mine_chance_now(c) * 100)}).")
+        return ""
     if roll < 0.22:  # rough terrain: half gain + small salvage
         gain //= 2
         c["area"] += gain
         c["res"]["materials"] = c["res"].get("materials", 0) + 8
-        msg = f"زمین سخت بود ({b['label']})؛ فقط {gain:,} کیلومتر مربع تصرف شد و ۸ واحد مصالح از زمین جدید جمع شد."
+        c["mine_misses"] = c.get("mine_misses", 0) + 1
+        msg = f"زمین سخت بود ({b['label']})؛ فقط {gain:,} کیلومتر مربع تصرف شد و ۸ واحد مصالح از زمین جدید جمع شد." + pity_note()
         rotate_terrain()
         return {"ok": True, "kind": "rough", "gain": gain, "msg": msg}
-    if roll < 0.30:  # discovery: a new mine (now named in the message)
-        res_found = random.choice(["iron", "titanium", "special", "materials"])
+    if roll < 0.22 + mine_chance:  # discovery: a new mine (named in the message)
+        weights = dict(PLANETS[c["planet"]]["continents"][c["continent"]]["mine_weights"])
+        if c["mines"].get("iron", 0) == 0:
+            weights["iron"] = weights.get("iron", 20) * 3  # an iron-less country surveys for iron first
+        res_found = random.choices(list(weights), weights=list(weights.values()))[0]
         c["mines"][res_found] = c["mines"].get(res_found, 0) + 1
+        c["mine_misses"] = 0
         c["area"] += gain
         msg = f"⛏️ اکتشاف موفق (+{gain:,} کیلومتر مربع) و یک معدن جدید کشف شد: {RESOURCES.get(res_found, res_found)}! (از این به بعد هر روز از آن برداشت می‌کنی)"
         rotate_terrain()
         return {"ok": True, "kind": "discovery", "gain": gain, "found": res_found, "msg": msg}
     c["area"] += gain
     c["res"]["materials"] = c["res"].get("materials", 0) + 15
-    msg = f"اکتشاف موفق! +{gain:,} کیلومتر مربع به کشور اضافه شد و ۱۵ واحد مصالح از زمین جدید جمع شد."
+    c["mine_misses"] = c.get("mine_misses", 0) + 1
+    msg = f"اکتشاف موفق! +{gain:,} کیلومتر مربع به کشور اضافه شد و ۱۵ واحد مصالح از زمین جدید جمع شد." + pity_note()
     rotate_terrain()
     return {"ok": True, "kind": "normal", "gain": gain, "msg": msg}
+
+def mine_chance_now(c: dict) -> float:
+    """Current per-exploration mine-discovery chance: 12% base, +4% for every
+    consecutive land-taking exploration without a mine (pity, capped +28%),
+    doubled in mine-focus mode."""
+    chance = 0.12 + min(0.28, 0.04 * c.get("mine_misses", 0))
+    if c.get("explore_focus") == "mine":
+        chance *= 2
+    return chance
 
 def military_power(c: dict) -> int:
     base = c["soldiers"] * (1 + mod(c, "military"))

@@ -350,6 +350,9 @@ def explore_view(c: dict, back: bool = False):
         b = c["borders"][d]
         st = {"open": "باز", "sea": "🌊 دریا", "country": "🚧 مرز کشور"}[b["status"]]
         kb.button(text=f"{label} — {st}", callback_data=f"explore:go:{d}")
+    focus = c.get("explore_focus") == "mine"
+    kb.button(text=("✅ " if focus else "") + "⛏️ حالت جستجوی معدن (زمین کمتر، شانس معدن ×۲)", callback_data="explore:focus:mine")
+    kb.button(text=("✅ " if not focus else "") + "🗺️ حالت عادی (زمین بیشتر)", callback_data="explore:focus:land")
     kb.adjust(2)
     nxt = ""
     cap = logic.explore_cap(c)
@@ -359,7 +362,10 @@ def explore_view(c: dict, back: bool = False):
     if back:
         kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
     kb.button(text="✖️ بستن", callback_data="close")
-    return (f"🔭 شارژ اکتشاف: {c['explore_charges']}/{cap}{nxt}\nهزینه هر اکتشاف: ⚡۱۵ 💧غذا ۲۰ 💰۲۵\nجهت اکتشاف را انتخاب کن:",
+    chance = int(logic.mine_chance_now(c) * 100)
+    misses = c.get("mine_misses", 0)
+    pity = f" | 🔍 {misses} اکتشاف بدون معدن (شانس بالا رفته)" if misses >= 3 else ""
+    return (f"🔭 شارژ اکتشاف: {c['explore_charges']}/{cap}{nxt}\nهزینه هر اکتشاف: ⚡۱۵ 💧غذا ۲۰ 💰۲۵\n⛏️ شانس کشف معدن در هر اکتشاف: ٪{chance}{pity}\nجهت اکتشاف را انتخاب کن:",
             kb.as_markup())
 
 async def send_explore_menu(msg: types.Message, c: dict):
@@ -372,6 +378,16 @@ async def explore_menu_cb(cb: types.CallbackQuery):
     if not c: return
     logic.regen_charges(c); await dbm.save_country(c)
     await send_explore_menu(cb.message, c); await cb.answer()
+
+@dp.callback_query(F.data.startswith("explore:focus:"))
+async def explore_focus(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    c["explore_focus"] = cb.data.split(":")[2]
+    await dbm.save_country(c)
+    text, kb = explore_view(c)
+    await cb.message.answer(text, reply_markup=kb)
+    await cb.answer("⛏️ حالت جستجوی معدن فعال شد؛ زمین کمتر می‌گیری ولی شانس معدن دو برابر است." if c["explore_focus"] == "mine" else "🗺️ حالت عادی فعال شد.")
 
 @dp.callback_query(F.data.startswith("explore:go:"))
 async def explore_go(cb: types.CallbackQuery):
