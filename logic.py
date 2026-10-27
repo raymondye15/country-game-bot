@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pure game logic operating on country dicts (no Telegram / DB imports -> unit-testable)."""
 import math, random, time
-from game_data import PLANETS, GOVERNMENTS, RESEARCH, BUILDINGS, RANDOM_EVENTS, RESOURCES
+from game_data import PLANETS, GOVERNMENTS, RESEARCH, BUILDINGS, RANDOM_EVENTS, RESOURCES, TOURISM_LEVELS
 
 HOUR = 3600
 DAY = 86400
@@ -67,7 +67,7 @@ def new_country(user_id: int, planet: str, continent: str, government: str,
         "res": {"food": 2000, "water": 2000, "energy": 3000, "materials": 300, "iron": 120, "titanium": 40, "special": 20},
         "mines": mines,
         "buildings": {"farm": 3, "waterplant": 3, "powerplant": 1, "mine": 1, "factory": 1, "university": 0, "hospital": 0, "barracks": 0},
-        "soldiers": 0, "accept_migrants": True, "fin_trade": 0, "last_fin": {}, "fin_day": {}, "carry": {},
+        "soldiers": 0, "accept_migrants": True, "tourism_level": 0, "tourists": 0.0, "fin_trade": 0, "last_fin": {}, "fin_day": {}, "carry": {},
         "day_births": 0, "day_deaths": 0, "day_pool": 0, "day_rp": 0,
         "last_births": 0, "last_deaths": 0, "last_mig_in": [], "last_mig_out": 0,
         "protest_hours": 0, "shortage_hours": 0,
@@ -187,7 +187,7 @@ RES_PRICE = {"food": 0.06, "water": 0.06, "energy": 0.08, "materials": 1.0,
              "iron": 1.5, "titanium": 4.0, "special": 6.0}
 BUILDING_SCORE = {"farm": 10, "waterplant": 10, "powerplant": 20, "mine": 25,
                   "factory": 30, "university": 25, "hospital": 20, "barracks": 20,
-                  "airport_inter": 100}
+                  "airport_inter": 100, "hotel": 15}
 
 def eco_score(c: dict):
     """Economic score: daily production value (main weight) + infrastructure
@@ -210,12 +210,47 @@ def sci_score(c: dict):
     parts = {"done": done, "rp_day": rp_day}
     return done + rp_day * 5, parts
 
+def tourism_score(c: dict):
+    """Tourism score: hotel infrastructure + industry level + yesterday's
+    visitor volume (log-scaled). Returns (total, breakdown)."""
+    hotels = c["buildings"].get("hotel", 0)
+    level = c.get("tourism_level", 0)
+    last = c.get("last_tour", {})
+    visitors = int(60 * math.log10(last.get("arrivals", 0) + 1))
+    parts = {"hotels": hotels * 40, "level": level * 150, "visitors": visitors}
+    return parts["hotels"] + parts["level"] + parts["visitors"], parts
+
+def tourism_rates(c: dict) -> dict:
+    """Daily tourism figures for a country (used by the tick and the view)."""
+    hotels = c["buildings"].get("hotel", 0)
+    level = c.get("tourism_level", 0)
+    if hotels <= 0:
+        return {"arrivals": 0.0, "spend": 0.0, "cap": 0, "offplanet": False}
+    offplanet = c["buildings"].get("airport_inter", 0) > 0
+    arrivals = hotels * 120 * (0.6 + level * 0.35) * (0.5 + c["happiness"] / 100.0)
+    spend = 0.7 * (1 + level * 0.25)
+    if offplanet:
+        arrivals *= 1.6
+        spend *= 1.5   # off-planet tourists are richer
+    return {"arrivals": arrivals, "spend": spend, "cap": hotels * 300, "offplanet": offplanet}
+
+def next_market_price(price: float, base: float, net_volume: float, rng) -> float:
+    """One hourly step of the global market price: mean reversion to the base
+    price + small random walk + supply/demand pressure from player trades
+    (net buying pushes up, net selling pushes down). Clamped to [0.35x, 3x]."""
+    drift = 0.03 * (base - price) / base
+    noise = rng.uniform(-0.025, 0.025)
+    pressure = max(-1.0, min(1.0, net_volume / 5000.0)) * 0.04
+    new = price * (1 + drift + noise + pressure)
+    return max(base * 0.35, min(base * 3.0, new))
+
 def national_power(c: dict) -> int:
     """Overall index: 40% economy + 25% science + population + military power.
     Lets a small advanced country outrank a big backward one."""
     eco, _ = eco_score(c)
     sci, _ = sci_score(c)
-    return int(eco * 0.40 + sci * 0.25 + c["population"] / 5000 + military_power(c) / 5)
+    tour, _ = tourism_score(c)
+    return int(eco * 0.40 + sci * 0.25 + tour * 0.10 + c["population"] / 5000 + military_power(c) / 5)
 
 def upkeep_factor(c: dict) -> float:
     """Progressive upkeep (late-game money sink): free up to 10 buildings, then
@@ -365,6 +400,20 @@ def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
                 c["population"] += mig
                 adjust_cities(c, mig)
                 c["day_pool"] = c.get("day_pool", 0) + mig
+    # tourism: visitors arrive, stay ~3 days, spend money every hour
+    tr = tourism_rates(c)
+    if tr["cap"] > 0:
+        visitors = c.get("tourists", 0.0)
+        arr_h = tr["arrivals"] / 24 * hours
+        dep_h = visitors * hours / 72.0
+        visitors = max(0.0, min(tr["cap"], visitors + arr_h - dep_h))
+        c["tourists"] = visitors
+        tf = carry.get("tour_income", 0.0) + visitors * tr["spend"] * hours / 24
+        tour_income = int(tf); carry["tour_income"] = tf - tour_income
+        if tour_income:
+            c["money"] += tour_income
+            fd = c.setdefault("fin_day", {}); fd["tourism"] = fd.get("tourism", 0) + tour_income
+        c["day_tour_arr"] = c.get("day_tour_arr", 0) + arr_h
     # protests & collapse (hour counters; collapse needs ~3+ days under 15%)
     stability = 1 - mod(c, "stability")
     if c["happiness"] < 30:
@@ -388,9 +437,13 @@ def daily_tick(c: dict, t: int = None) -> dict:
     upkeep_buildings = int(fd.get("upkeep_buildings", 0))
     upkeep_army = int(fd.get("upkeep_army", 0)); civic = int(fd.get("civic", 0))
     upkeep = upkeep_buildings + upkeep_army + civic
+    tour_income_day = int(fd.get("tourism", 0))
     c["last_fin"] = {"tax": income, "factory": factory_income, "trade": trade_in,
+                     "tourism": tour_income_day,
                      "upkeep_buildings": upkeep_buildings, "upkeep_army": upkeep_army,
-                     "civic": civic, "net_tick": income + factory_income - upkeep}
+                     "civic": civic, "net_tick": income + factory_income + tour_income_day - upkeep}
+    c["last_tour"] = {"arrivals": int(c.get("day_tour_arr", 0)), "income": tour_income_day}
+    c["day_tour_arr"] = 0
     c["fin_day"] = {}
     rp_gain = c.get("day_rp", 0); c["day_rp"] = 0
     # demographics & migration snapshots (accumulated by the hourly slices)
@@ -426,7 +479,10 @@ def daily_tick(c: dict, t: int = None) -> dict:
                 c["res"][k] = max(0, c["res"].get(k, 0) + v)
         report.append(f"{event['fa']}: {event['text']}")
     c["last_daily_ts"] = t
+    if tour_income_day > 0:
+        report.append(f"🏖️ گردشگری: {c['last_tour']['arrivals']:,} گردشگر آمدند و {tour_income_day:,} 💰 خرج کردند.")
     report.append(f"📊 گزارش روزانه: درآمد {income + factory_income:,}، هزینه نگهداری {upkeep:,}، امتیاز تحقیق +{rp_gain}، جمعیت {c['population']:,}")
+
     report.append(f"👶 تولد: +{births:,} | ⚰️ مرگ‌ومیر: −{deaths:,} | خالص جمعیت: {births - deaths:+,}")
     return {"report": report, "collapsed": False, "event": event}
 
