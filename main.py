@@ -795,7 +795,7 @@ def finance_text(c: dict) -> str:
     prod = logic.production(c)
     b = c["buildings"]
     tax_factor = {1: 0.6, 2: 1.0, 3: 1.6}[c["tax_rate"]]
-    est_tax = int(c["population"] * 0.004 * tax_factor * (1 + logic.mod(c, "economy")))
+    est_tax = int(c["population"] * logic.TAX_PER_CAPITA * tax_factor * (1 + logic.mod(c, "economy")))
     est_upkeep = (logic.building_upkeep(c)
                   + int(c.get("soldiers", 0) * 0.15) + int(c["population"] * 0.0008))
     cap = logic.capacity(c)

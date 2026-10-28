@@ -5,6 +5,12 @@ from game_data import PLANETS, GOVERNMENTS, RESEARCH, BUILDINGS, RANDOM_EVENTS, 
 
 HOUR = 3600
 DAY = 86400
+# Economy balance (2026-10-28 rebalance): tax used to dwarf building income
+# (0.004/capita vs 120/factory = 25:1), making factories pointless. Now tax
+# is halved and a factory earns 350/day, so a mid-size country with ~5
+# factories earns roughly as much from industry as from taxes.
+TAX_PER_CAPITA = 0.002
+FACTORY_INCOME = 350
 
 def now_ts() -> int:
     return int(time.time())
@@ -352,10 +358,12 @@ def national_power(c: dict) -> int:
 
 def upkeep_factor(c: dict) -> float:
     """Progressive upkeep (late-game money sink): free up to 10 buildings, then
-    +6% per extra building, plus another +10% per building past 25.
-    20 buildings = x1.6, 28 = x2.4, 40 = x4.3, 60 = x7.5."""
+    +5% per extra building, plus another +8% per building past 25.
+    20 buildings = x1.5, 28 = x2.1, 40 = x3.7, 60 = x6.3.
+    (Softened in the 2026-10-28 rebalance: with tax halved, the old x6.5
+    factor at ~55 buildings pushed developed countries underwater.)"""
     total = sum(c["buildings"].values())
-    return 1 + max(0, total - 10) * 0.06 + max(0, total - 25) * 0.10
+    return 1 + max(0, total - 10) * 0.05 + max(0, total - 25) * 0.08
 
 def building_upkeep(c: dict) -> int:
     b = c["buildings"]
@@ -414,11 +422,11 @@ def econ_tick(c: dict, frac: float = 1.0):
         carry[r] = total - applied
         c["res"][r] = max(0, int(c["res"].get(r, 0) + applied))
     tax_factor = {1: 0.6, 2: 1.0, 3: 1.6}[c["tax_rate"]]
-    income = c["population"] * 0.004 * tax_factor * (1 + mod(c, "economy"))
+    income = c["population"] * TAX_PER_CAPITA * tax_factor * (1 + mod(c, "economy"))
     ub = building_upkeep(c)
     ua = c.get("soldiers", 0) * 0.15
     civic = c["population"] * 0.0008
-    factory_income = b.get("factory", 0) * 120
+    factory_income = b.get("factory", 0) * FACTORY_INCOME
     if law(c) == "industrial_boom":
         factory_income = int(factory_income * 1.5)
     net = (income + factory_income - ub - ua - civic) * frac
