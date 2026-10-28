@@ -161,16 +161,16 @@ GOVERNMENTS = {
 }
 
 BUILDINGS = {
-    "farm":      {"fa": "🌾 مزرعه",        "cost": {"materials": 40, "money": 200},  "upkeep": 10,  "desc": "تولید غذا"},
-    "waterplant":{"fa": "🚰 تصفیه‌خانه آب", "cost": {"materials": 50, "money": 250},  "upkeep": 12,  "desc": "تولید آب"},
-    "powerplant":{"fa": "🔋 نیروگاه",       "cost": {"materials": 60, "iron": 20, "money": 300}, "upkeep": 15, "desc": "تولید انرژی"},
-    "mine":      {"fa": "⛏️ معدن پیشرفته",  "cost": {"materials": 50, "money": 300},  "upkeep": 15,  "desc": "افزایش برداشت همه معادن"},
-    "factory":   {"fa": "🏭 کارخانه",       "cost": {"materials": 80, "iron": 30, "money": 400}, "upkeep": 20, "desc": "تولید مصالح و درآمد"},
-    "university":{"fa": "🎓 دانشگاه",       "cost": {"materials": 70, "money": 500},  "upkeep": 25,  "desc": "امتیاز تحقیق روزانه"},
-    "hospital":  {"fa": "🏥 بیمارستان",     "cost": {"materials": 60, "money": 400},  "upkeep": 20,  "desc": "رضایت و رشد جمعیت"},
-    "barracks":  {"fa": "🪖 پادگان",        "cost": {"materials": 70, "iron": 20, "money": 350}, "upkeep": 18, "desc": "ظرفیت و قدرت ارتش"},
-    "airport_inter": {"fa": "🛸 فرودگاه بین‌سیاره‌ای", "cost": {"materials": 200, "iron": 200, "titanium": 80, "money": 6000}, "upkeep": 150, "desc": "مهاجرت و گردشگر از سیاره‌های دیگر"},
-    "hotel": {"fa": "🏨 هتل گردشگری", "cost": {"materials": 60, "money": 1200}, "upkeep": 25, "desc": "پذیرش گردشگر و درآمد از آن‌ها"},
+    "farm":      {"fa": "🌾 مزرعه",        "cost": {"materials": 40, "money": 200},  "upkeep": 6,  "desc": "تولید غذا"},
+    "waterplant":{"fa": "🚰 تصفیه‌خانه آب", "cost": {"materials": 50, "money": 250},  "upkeep": 7,  "desc": "تولید آب"},
+    "powerplant":{"fa": "🔋 نیروگاه",       "cost": {"materials": 60, "iron": 20, "money": 300}, "upkeep": 9, "desc": "تولید انرژی"},
+    "mine":      {"fa": "⛏️ معدن پیشرفته",  "cost": {"materials": 50, "money": 300},  "upkeep": 9,  "desc": "افزایش برداشت همه معادن"},
+    "factory":   {"fa": "🏭 کارخانه",       "cost": {"materials": 80, "iron": 30, "money": 400}, "upkeep": 12, "desc": "تولید مصالح و درآمد"},
+    "university":{"fa": "🎓 دانشگاه",       "cost": {"materials": 70, "money": 500},  "upkeep": 15,  "desc": "امتیاز تحقیق روزانه"},
+    "hospital":  {"fa": "🏥 بیمارستان",     "cost": {"materials": 60, "money": 400},  "upkeep": 12,  "desc": "رضایت و رشد جمعیت"},
+    "barracks":  {"fa": "🪖 پادگان",        "cost": {"materials": 70, "iron": 20, "money": 350}, "upkeep": 11, "desc": "ظرفیت و قدرت ارتش"},
+    "airport_inter": {"fa": "🛸 فرودگاه بین‌سیاره‌ای", "cost": {"materials": 200, "iron": 200, "titanium": 80, "money": 6000}, "upkeep": 90, "desc": "مهاجرت و گردشگر از سیاره‌های دیگر"},
+    "hotel": {"fa": "🏨 هتل گردشگری", "cost": {"materials": 60, "money": 1200}, "upkeep": 15, "desc": "پذیرش گردشگر و درآمد از آن‌ها"},
 }
 
 # Interplanetary Council (IC) laws: players vote each term; the winning law

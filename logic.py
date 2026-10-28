@@ -357,13 +357,14 @@ def national_power(c: dict) -> int:
     return int(eco * 0.40 + sci * 0.25 + tour * 0.10 + c["population"] / 5000 + military_power(c) / 5)
 
 def upkeep_factor(c: dict) -> float:
-    """Progressive upkeep (late-game money sink): free up to 10 buildings, then
-    +5% per extra building, plus another +8% per building past 25.
-    20 buildings = x1.5, 28 = x2.1, 40 = x3.7, 60 = x6.3.
-    (Softened in the 2026-10-28 rebalance: with tax halved, the old x6.5
-    factor at ~55 buildings pushed developed countries underwater.)"""
+    """Progressive upkeep (late-game money sink): free up to 15 buildings,
+    then +3% per extra building, plus another +5% per building past 30.
+    20 buildings = x1.15, 30 = x1.45, 40 = x2.1, 54 = x3.4, 60 = x3.9.
+    (Flattened twice in the 2026-10-28 rebalance alongside ~40% lower base
+    upkeeps: building upkeep had reached ~70% of a developed country's
+    gross income, which the owner judged far too high.)"""
     total = sum(c["buildings"].values())
-    return 1 + max(0, total - 10) * 0.05 + max(0, total - 25) * 0.08
+    return 1 + max(0, total - 15) * 0.03 + max(0, total - 30) * 0.05
 
 def building_upkeep(c: dict) -> int:
     b = c["buildings"]
