@@ -1404,7 +1404,7 @@ TEXT_TRIGGERS = {
     "شهرها": "cities", "شهر": "cities", "cities": "cities",
     "فضا": "space", "برنامه فضایی": "space", "ماهواره": "space", "space": "space",
     "شورا": "council", "شورای بین‌سیاره‌ای": "council", "رأی": "council", "رأی‌گیری": "council", "قانون": "council", "council": "council", "vote": "council",
-    "مأموریت": "quests", "ماموریت": "quests", "دستاورد": "quests", "دستاوردها": "quests", "quests": "quests", "missions": "quests",
+    "مأموریت": "quests", "ماموریت": "quests", "رای": "council", "رای‌گیری": "council", "دستاورد": "quests", "دستاوردها": "quests", "quests": "quests", "missions": "quests",
     "راهنما": "guide", "کمک": "guide",
     "منو": "menu", "منوی اصلی": "menu", "menu": "menu",
 }
@@ -1992,7 +1992,10 @@ async def text_trigger(msg: types.Message, state: FSMContext):
     silently swallowed «بستن منو», /menu, /help and the رتبه‌بندی button)."""
     if await state.get_state() is not None:
         raise SkipHandler
-    key = TEXT_TRIGGERS.get(msg.text.strip().lower())
+    raw = msg.text.strip().lower()
+    # tolerate Arabic-keyboard variants (ي/ك/أ...) so triggers work for everyone
+    norm = raw.translate(str.maketrans({"ي": "ی", "ك": "ک", "أ": "ا", "إ": "ا", "ة": "ه", "ؤ": "و", "ئ": "ی"}))
+    key = TEXT_TRIGGERS.get(norm) or TEXT_TRIGGERS.get(raw)
     if not key:
         raise SkipHandler
     if not await gate(msg):
