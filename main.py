@@ -20,7 +20,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db as dbm
 import logic
-from game_data import PLANETS, GOVERNMENTS, BUILDINGS, RESEARCH, RESOURCES, DIRECTIONS, TOURISM_LEVELS, CITY_SPECS, SPACE_PROJECTS, SPACE_ORDER, city_upgrade_cost, LAWS
+from game_data import PLANETS, GOVERNMENTS, BUILDINGS, RESEARCH, RESOURCES, DIRECTIONS, TOURISM_LEVELS, CITY_SPECS, SPACE_PROJECTS, SPACE_ORDER, city_upgrade_cost, LAWS, ACHIEVEMENTS, MISSIONS_DAILY, MISSIONS_WEEKLY
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("gamebot")
@@ -68,7 +68,8 @@ def main_kb(selective: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="💰 درآمد و مالی"), KeyboardButton(text="🧳 مهاجرت")],
         [KeyboardButton(text="🏖️ گردشگری"), KeyboardButton(text="❓ راهنما")],
         [KeyboardButton(text="🏙️ شهرها"), KeyboardButton(text="🚀 برنامه فضایی")],
-        [KeyboardButton(text="🗳️ شورای بین‌سیاره‌ای"), KeyboardButton(text="✖️ بستن منو")],
+        [KeyboardButton(text="🗳️ شورای بین‌سیاره‌ای"), KeyboardButton(text="🎯 مأموریت و دستاورد")],
+        [KeyboardButton(text="✖️ بستن منو")],
     ])
 
 async def my_country(msg_or_cb) -> dict | None:
@@ -107,7 +108,8 @@ GUIDE_TEXT = (
     "• 📈 بورس جهانی: همه منابع قیمت لحظه‌ای دارند که هر ساعت با عرضه/تقاضا و معاملات بازیکن‌ها تغییر می‌کند؛ از بخش تجارت می‌توانی فوری بخری و بفروشی. در ترید و بازار، اگر قیمت یک معامله خیلی بالاتر از قیمت جهانی باشد، ربات به طرف مقابل هشدار می‌دهد.",
     "• 🏙️ شهرها: هر شهر تا سطح ۵ ارتقا می‌گیرد و یک تخصص دارد (کشاورزی، صنعتی، علمی، توریستی یا تجاری) که اثرش با سطح شهر بیشتر می‌شود. تغییر تخصص ۴۰۰ 💰 هزینه دارد.",
     "• 🚀 برنامه فضایی: زنجیره‌ای از پروژه‌ها (ماهواره، تلسکوپ، ایستگاه فضایی، پایگاه قمری) که به ترتیب ساخته می‌شوند؛ تحقیق روزانه، گردشگری و امتیاز علمی را بالا می‌برند و پایگاه قمری ماده ویژه تولید می‌کند.",
-    "• 🗳️ شورای بین‌سیاره‌ای (IC): هر دوره از بین ۴ قانون نامزد رأی می‌دهی؛ قانون برنده تا دوره بعد روی همه کشورها اعمال می‌شود (صلح، رونق گردشگری، بازار آزاد و...). هر کشور یک رأی دارد و می‌توانی رأیت را عوض کنی."
+    "• 🗳️ شورای بین‌سیاره‌ای (IC): هر دوره از بین ۴ قانون نامزد رأی می‌دهی؛ قانون برنده تا دوره بعد روی همه کشورها اعمال می‌شود (صلح، رونق گردشگری، بازار آزاد و...). هر کشور یک رأی دارد و می‌توانی رأیت را عوض کنی.",
+    "• 🎯 مأموریت و دستاورد: هر روز و هر هفته یک مأموریت با جایزه داری (اکتشاف، کشف معدن، معامله در بورس، درآمد گردشگری و...) و ۱۲ دستاورد دائمی با مدال و جایزه در پروفایل کشورت ثبت می‌شود."
     "• 👶 زاد و ولد و مرگ‌ومیر: هر ساعت در کشورت تولد و مرگ رخ می‌دهد؛ رضایت بالا و بیمارستان تولد را بیشتر و مرگ‌ومیر را کمتر می‌کند و گرسنگی مرگ‌ومیر را شدید بالا می‌برد. همه سیستم‌های زنده بازی (اقتصاد، جمعیت، رضایت، امتیاز تحقیق، مهاجرت) ساعتی کار می‌کنند؛ گزارش کامل هر روز می‌آید.\n"
     "• 🏆 رتبه‌بندی را می‌توانی بر اساس قدرت ملی، امتیاز اقتصادی، امتیاز علمی، جمعیت یا مساحت مرتب کنی. امتیاز اقتصادی از تولید روزانه، ساختمان‌ها و معادن می‌آید (پولِ انباشته به‌تنهایی رتبه نمی‌آورد) و امتیاز علمی از تحقیقات کامل‌شده و سرعت تولید امتیاز تحقیق.\n"
     "• 🎛️ لازم نیست دکمه‌های پایین صفحه را بزنی: اسم هر بخش را فقط بنویس (مثل «لیدربورد»، «تجارت»، «کشور من» یا «منو») تا همان بخش به صورت منوی شیشه‌ای باز شود. منوها در گروه هم فقط برای خودت کار می‌کنند.\n"
@@ -315,7 +317,12 @@ def country_view(c: dict, back: bool = False):
     if back:
         kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
     kb.button(text="✖️ بستن", callback_data="close")
-    return logic.country_text(c), kb.as_markup()
+    text = logic.country_text(c)
+    ach = c.get("achievements", [])
+    if ach:
+        medals = " ".join(ACHIEVEMENTS[a]["fa"].split(" ")[0] for a in ach if a in ACHIEVEMENTS)
+        text += f"\n🏅 دستاوردها ({len(ach)}): {medals}"
+    return text, kb.as_markup()
 
 @dp.callback_query(F.data == "tax:menu")
 async def tax_menu(cb: types.CallbackQuery):
@@ -441,6 +448,7 @@ async def build_cb(cb: types.CallbackQuery):
         if k == "money": c["money"] -= v
         else: c["res"][k] = c["res"].get(k, 0) - v
     c["buildings"][bid] = c["buildings"].get(bid, 0) + 1
+    logic.stat_add(c, "built")
     await dbm.save_country(c)
     await cb.message.answer(f"✅ {BUILDINGS[bid]['fa']} ساخته شد — سطح {c['buildings'][bid]}")
     await cb.answer()
@@ -585,8 +593,10 @@ async def trade_buy(cb: types.CallbackQuery):
     if c["money"] < total:
         await cb.answer(f"پول کافی نداری ({c['money']:,}/{total:,})", show_alert=True); return
     c["money"] -= total
+    logic.stat_add(c, "fx_value", total)
     c["res"][offer["resource"]] = c["res"].get(offer["resource"], 0) + offer["amount"]
     seller["money"] += offer["price"]
+    logic.stat_add(seller, "fx_value", offer["price"])
     seller["fin_trade"] = seller.get("fin_trade", 0) + offer["price"]
     await dbm.save_country(c); await dbm.save_country(seller)
     await dbm.db.trade_offers.delete_one({"_id": oid})
@@ -761,6 +771,7 @@ async def fx_amount(msg: types.Message, state: FSMContext):
             await msg.answer(f"پول کافی نداری: این خرید {cost:,} 💰 می‌شود ولی خزانه‌ات {c['money']:,} است. مقدار کمتری بفرست:"); return
         c["money"] -= cost
         c["res"][r] = c["res"].get(r, 0) + amount
+        logic.stat_add(c, "fx_value", cost)
         await dbm.save_country(c)
         await dbm.db.meta.update_one({"_id": "market"}, {"$inc": {f"pressure.{r}": amount}}, upsert=True)
         await state.clear()
@@ -771,6 +782,7 @@ async def fx_amount(msg: types.Message, state: FSMContext):
         gain = int(amount * price * (1 - fee_rate))
         c["res"][r] -= amount
         c["money"] += gain
+        logic.stat_add(c, "fx_value", gain)
         c["fin_trade"] = c.get("fin_trade", 0) + gain
         await dbm.save_country(c)
         await dbm.db.meta.update_one({"_id": "market"}, {"$inc": {f"pressure.{r}": -amount}}, upsert=True)
@@ -1276,10 +1288,10 @@ def glass_kb():
                      ("💰 درآمد و مالی", "finance"), ("🧳 مهاجرت", "migration"),
                      ("🏖️ گردشگری", "tourism"), ("🏙️ شهرها", "cities"),
                      ("🚀 برنامه فضایی", "space"), ("🗳️ شورای بین‌سیاره‌ای", "council"),
-                     ("❓ راهنما", "guide")]:
+                     ("🎯 مأموریت و دستاورد", "quests"), ("❓ راهنما", "guide")]:
         kb.button(text=txt, callback_data=f"menu:go:{key}")
     kb.button(text="✖️ بستن", callback_data="close")
-    kb.adjust(2, 2, 2, 2, 2, 2, 2, 2, 2, 1)
+    kb.adjust(2, 2, 2, 2, 2, 2, 2, 2, 2, 2)
     return kb.as_markup()
 
 def back_kb():
@@ -1309,6 +1321,11 @@ async def render_section(key: str, c: dict):
         return space_view(c)
     if key == "council":
         return await council_view(c)
+    if key == "quests":
+        text, kb, dirty = quests_view(c)
+        if dirty:
+            await dbm.save_country(c)
+        return text, kb
     if key == "diplo":
         return await diplo_text(c), back_kb()
     if key == "army":
@@ -1387,6 +1404,7 @@ TEXT_TRIGGERS = {
     "شهرها": "cities", "شهر": "cities", "cities": "cities",
     "فضا": "space", "برنامه فضایی": "space", "ماهواره": "space", "space": "space",
     "شورا": "council", "شورای بین‌سیاره‌ای": "council", "رأی": "council", "رأی‌گیری": "council", "قانون": "council", "council": "council", "vote": "council",
+    "مأموریت": "quests", "ماموریت": "quests", "دستاورد": "quests", "دستاوردها": "quests", "quests": "quests", "missions": "quests",
     "راهنما": "guide", "کمک": "guide",
     "منو": "menu", "منوی اصلی": "menu", "menu": "menu",
 }
@@ -1735,6 +1753,122 @@ async def council_vote(cb: types.CallbackQuery):
         await cb.message.answer(text, reply_markup=kb)
     await cb.answer(f"🗳️ رأی تو ثبت شد: {LAWS[law_id]['fa']}")
 
+
+# ---------------------------------------------------------------- missions & achievements
+def _day_key(ts: int) -> str:
+    import time as _t
+    return _t.strftime("%Y-%m-%d", _t.gmtime(ts + 12600))  # Tehran day boundary
+
+def _week_key(ts: int) -> str:
+    import time as _t
+    return _t.strftime("%G-W%V", _t.gmtime(ts + 12600))
+
+def ensure_missions(c: dict) -> bool:
+    """Assign today's / this week's mission if missing or stale. Returns True
+    when something changed. Assignment is deterministic per player+period."""
+    dirty = False
+    ts = logic.now_ts()
+    stats = c.get("stats", {})
+    dk = _day_key(ts)
+    if c.get("mission_day", {}).get("key") != dk:
+        m = MISSIONS_DAILY[random.Random(f"{c['user_id']}:{dk}").randrange(len(MISSIONS_DAILY))]
+        c["mission_day"] = {"key": dk, "id": m["id"], "start": stats.get(m["stat"], 0), "claimed": False}
+        dirty = True
+    wk = _week_key(ts)
+    if c.get("mission_week", {}).get("key") != wk:
+        m = MISSIONS_WEEKLY[random.Random(f"{c['user_id']}:{wk}").randrange(len(MISSIONS_WEEKLY))]
+        c["mission_week"] = {"key": wk, "id": m["id"], "start": stats.get(m["stat"], 0), "claimed": False}
+        dirty = True
+    return dirty
+
+def _mission_state(c: dict, slot: str, pool: list):
+    m = c.get(slot)
+    if not m:
+        return None
+    md = next((x for x in pool if x["id"] == m["id"]), None)
+    if not md:
+        return None
+    progress = c.get("stats", {}).get(md["stat"], 0) - m.get("start", 0)
+    return md, max(0, progress), m.get("claimed", False)
+
+def _bar(done: int, target: int, width: int = 10) -> str:
+    filled = min(width, int(done / target * width)) if target else width
+    return "▓" * filled + "░" * (width - filled)
+
+def _reward_txt(md: dict) -> str:
+    parts = []
+    if md.get("money"): parts.append(f"{md['money']:,} 💰")
+    if md.get("rp"): parts.append(f"{md['rp']} RP")
+    return " + ".join(parts)
+
+def quests_view(c: dict):
+    dirty = ensure_missions(c)
+    lines = [f"🎯 مأموریت‌ها و دستاوردهای «{c['name']}»", ""]
+    kb = InlineKeyboardBuilder()
+    for slot, pool, label in (("mission_day", MISSIONS_DAILY, "📅 مأموریت روزانه"),
+                              ("mission_week", MISSIONS_WEEKLY, "🗓️ مأموریت هفتگی")):
+        st = _mission_state(c, slot, pool)
+        if not st:
+            continue
+        md, progress, claimed = st
+        lines.append(f"{label}: {md['fa']}")
+        lines.append(f"   {_bar(progress, md['target'])} {min(progress, md['target'])}/{md['target']} — جایزه: {_reward_txt(md)}")
+        if claimed:
+            lines.append("   ✅ جایزه گرفته شد؛ مأموریت بعدی در دوره بعد می‌آید.")
+        elif progress >= md["target"]:
+            lines.append("   🎉 کامل شد! دکمه زیر را بزن و جایزه را بگیر:")
+            kb.button(text=f"🎁 گرفتن جایزه {label}", callback_data=f"quest:claim:{slot}")
+        lines.append("")
+    unlocked = c.get("achievements", [])
+    lines.append(f"🏅 دستاوردها ({len(unlocked)} از {len(ACHIEVEMENTS)}):")
+    for aid, a in ACHIEVEMENTS.items():
+        if aid in unlocked:
+            lines.append(f"✅ {a['fa']} — {a['desc']}")
+        else:
+            lines.append(f"⬜ {a['fa']} — {a['desc']} (جایزه: {_reward_txt(a)})")
+    kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(1)
+    return "\n".join(lines), kb.as_markup(), dirty
+
+@dp.message(F.text == "🎯 مأموریت و دستاورد")
+@dp.message(Command("quests"))
+async def cmd_quests(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    text, kb, dirty = quests_view(c)
+    if dirty:
+        await dbm.save_country(c)
+    sent = await msg.answer(text, reply_markup=kb)
+    await track_menu(sent, msg.from_user.id)
+
+@dp.callback_query(F.data.startswith("quest:claim:"))
+async def quest_claim(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    slot = cb.data.split(":")[2]
+    pool = MISSIONS_DAILY if slot == "mission_day" else MISSIONS_WEEKLY
+    ensure_missions(c)
+    st = _mission_state(c, slot, pool)
+    if not st:
+        await cb.answer("مأموریتی پیدا نشد.", show_alert=True); return
+    md, progress, claimed = st
+    if claimed:
+        await cb.answer("جایزه این مأموریت را قبلاً گرفته‌ای."); return
+    if progress < md["target"]:
+        await cb.answer(f"هنوز کامل نشده است ({progress}/{md['target']}).", show_alert=True); return
+    c[slot]["claimed"] = True
+    c["money"] += md.get("money", 0)
+    c["rp"] = c.get("rp", 0) + md.get("rp", 0)
+    await dbm.save_country(c)
+    text, kb, _ = quests_view(c)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await cb.answer(f"🎁 جایزه مأموریت را گرفتی: {_reward_txt(md)}")
+
 # ---------------------------------------------------------------- leaderboard / guide / admin
 LB_MODES = {"power": "👑 قدرت ملی", "eco": "💰 امتیاز اقتصادی", "sci": "🔬 امتیاز علمی",
             "tourism": "🏖️ امتیاز گردشگری", "pop": "👥 جمعیت", "area": "🗺️ مساحت"}
@@ -1940,10 +2074,20 @@ async def run_tick() -> dict:
         # exploration charges (1/hour, stored up to cap)
         if logic.regen_charges(c, t):
             stats["charges"] += 1; changed = True
+        # achievements: check continuously, grant + notify on new unlocks
+        for aid in logic.check_achievements(c):
+            c.setdefault("achievements", []).append(aid)
+            a = ACHIEVEMENTS[aid]
+            c["money"] += a["money"]; c["rp"] = c.get("rp", 0) + a["rp"]
+            changed = True
+            await notify(c["user_id"], f"🏅 دستاورد جدید: {a['fa']}!\nجایزه: {a['money']:,} 💰" + (f" و {a['rp']} RP" if a["rp"] else ""))
+        if ensure_missions(c):
+            changed = True
         # research completion
         if c.get("researching") and t >= c["researching"]["finish_ts"]:
             rid = c["researching"]["id"]
             c["researched"].append(rid)
+            logic.stat_add(c, "research")
             c["researching"] = None
             stats["research_done"] += 1; changed = True
             await notify(c["user_id"], f"🔬 تحقیق «{RESEARCH[rid]['fa']}» کامل شد! اثر آن از حالا فعال است.")

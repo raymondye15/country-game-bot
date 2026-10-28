@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pure game logic operating on country dicts (no Telegram / DB imports -> unit-testable)."""
 import math, random, time
-from game_data import PLANETS, GOVERNMENTS, RESEARCH, BUILDINGS, RANDOM_EVENTS, RESOURCES, TOURISM_LEVELS, SPACE_PROJECTS
+from game_data import PLANETS, GOVERNMENTS, RESEARCH, BUILDINGS, RANDOM_EVENTS, RESOURCES, TOURISM_LEVELS, SPACE_PROJECTS, ACHIEVEMENTS
 
 HOUR = 3600
 DAY = 86400
@@ -43,6 +43,30 @@ def space_done(c: dict) -> list:
 
 def space_rp_day(c: dict) -> int:
     return sum(SPACE_PROJECTS[p]["rp_day"] for p in space_done(c) if p in SPACE_PROJECTS)
+
+def stat_add(c: dict, key: str, n=1):
+    st = c.setdefault("stats", {})
+    st[key] = st.get(key, 0) + n
+
+def check_achievements(c: dict) -> list:
+    """Achievement ids whose condition holds and are not unlocked yet."""
+    have = set(c.get("achievements", []))
+    done_space = space_done(c)
+    conds = {
+        "pop1m": c["population"] >= 1_000_000,
+        "area200k": c["area"] >= 200_000,
+        "rich50k": c["money"] >= 50_000,
+        "scholar5": len(c.get("researched", [])) >= 5,
+        "miner8": sum(c["mines"].values()) >= 8,
+        "factory5": c["buildings"].get("factory", 0) >= 5,
+        "city5": any(ct.get("level", 1) >= 5 for ct in c.get("cities", [])),
+        "tour500": tourism_score(c)[0] >= 500,
+        "astro": len(done_space) >= 1,
+        "moon": "moonbase" in done_space,
+        "power1k": national_power(c) >= 1000,
+        "trader20k": c.get("stats", {}).get("fx_value", 0) >= 20_000,
+    }
+    return [aid for aid, ok in conds.items() if ok and aid not in have and aid in ACHIEVEMENTS]
 
 def law(c: dict):
     """The Interplanetary Council law currently in force for this country."""
@@ -148,6 +172,7 @@ def do_exploration(c: dict, direction: str, other_countries: list) -> dict:
         if have < v:
             return {"ok": False, "msg": "منابع کافی برای اکتشاف نداری (انرژی/غذا/پول لازم است)."}
     c["explore_charges"] -= 1
+    stat_add(c, "explore")
     c["money"] -= EXPLORE_COST["money"]
     c["res"]["energy"] -= EXPLORE_COST["energy"]
     c["res"]["food"] -= EXPLORE_COST["food"]
@@ -190,6 +215,7 @@ def do_exploration(c: dict, direction: str, other_countries: list) -> dict:
             weights["iron"] = weights.get("iron", 20) * 3  # an iron-less country surveys for iron first
         res_found = random.choices(list(weights), weights=list(weights.values()))[0]
         c["mines"][res_found] = c["mines"].get(res_found, 0) + 1
+        stat_add(c, "mines")
         c["mine_misses"] = 0
         c["area"] += gain
         msg = f"⛏️ اکتشاف موفق (+{gain:,} کیلومتر مربع) و یک معدن جدید کشف شد: {RESOURCES.get(res_found, res_found)}! (از این به بعد هر روز از آن برداشت می‌کنی)"
@@ -490,6 +516,7 @@ def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
         tf = carry.get("tour_income", 0.0) + visitors * tr["spend"] * hours / 24
         tour_income = int(tf); carry["tour_income"] = tf - tour_income
         if tour_income:
+            stat_add(c, "tourism_income", tour_income)
             c["money"] += tour_income
             fd = c.setdefault("fin_day", {}); fd["tourism"] = fd.get("tourism", 0) + tour_income
         c["day_tour_arr"] = c.get("day_tour_arr", 0) + arr_h

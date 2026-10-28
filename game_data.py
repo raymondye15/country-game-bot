@@ -187,6 +187,41 @@ LAWS = {
     "industrial_boom": {"fa": "🏭 رونق صنعتی", "desc": "درآمد کارخانه‌های همه کشورها +۵۰٪."},
 }
 
+# Achievements: one-time milestones with a reward, checked continuously.
+ACHIEVEMENTS = {
+    "pop1m": {"fa": "👥 جمعیت میلیونی", "desc": "جمعیت کشورت به ۱ میلیون نفر برسد", "money": 1000, "rp": 0},
+    "area200k": {"fa": "🗺️ امپراتوری پهناور", "desc": "مساحت کشورت به ۲۰۰٬۰۰۰ کیلومتر مربع برسد", "money": 1000, "rp": 0},
+    "rich50k": {"fa": "💰 خزانه پر", "desc": "موجودی خزانه‌ات به ۵۰٬۰۰۰ 💰 برسد", "money": 0, "rp": 20},
+    "scholar5": {"fa": "🔬 دانشمند", "desc": "۵ تحقیق را کامل کن", "money": 500, "rp": 30},
+    "miner8": {"fa": "⛏️ معدن‌دار بزرگ", "desc": "مجموع معدن‌هایت به ۸ برسد", "money": 800, "rp": 0},
+    "factory5": {"fa": "🏭 قطب صنعتی", "desc": "۵ کارخانه داشته باش", "money": 800, "rp": 0},
+    "city5": {"fa": "🏙️ شهرساز", "desc": "یک شهر را به سطح ۵ برسان", "money": 1200, "rp": 0},
+    "tour500": {"fa": "🏖️ قطب گردشگری", "desc": "امتیاز گردشگری‌ات به ۵۰۰ برسد", "money": 1500, "rp": 0},
+    "astro": {"fa": "🚀 فضانورد", "desc": "اولین پروژه فضایی را کامل کن", "money": 1000, "rp": 20},
+    "moon": {"fa": "🌕 فاتح ماه", "desc": "پایگاه قمری را بساز", "money": 3000, "rp": 50},
+    "power1k": {"fa": "👑 قدرت بزرگ", "desc": "قدرت ملی‌ات به ۱۰۰۰ برسد", "money": 2000, "rp": 0},
+    "trader20k": {"fa": "📈 سلطان بورس", "desc": "مجموع معاملاتت در بورس و بازار به ۲۰٬۰۰۰ 💰 برسد", "money": 1500, "rp": 0},
+}
+
+# Missions: one daily + one weekly per player, progress measured from the
+# lifetime counters in c["stats"] (snapshot at assignment time).
+MISSIONS_DAILY = [
+    {"id": "explore3", "fa": "۳ بار اکتشاف انجام بده", "stat": "explore", "target": 3, "money": 300, "rp": 0},
+    {"id": "mine1", "fa": "۱ معدن جدید کشف کن", "stat": "mines", "target": 1, "money": 500, "rp": 0},
+    {"id": "fx1000", "fa": "در بورس و بازار ۱٬۰۰۰ 💰 معامله کن", "stat": "fx_value", "target": 1000, "money": 200, "rp": 0},
+    {"id": "research1", "fa": "۱ تحقیق کامل کن", "stat": "research", "target": 1, "money": 0, "rp": 15},
+    {"id": "build1", "fa": "۱ ساختمان بساز", "stat": "built", "target": 1, "money": 250, "rp": 0},
+    {"id": "tour300", "fa": "۳۰۰ 💰 از گردشگری درآمد کسب کن", "stat": "tourism_income", "target": 300, "money": 200, "rp": 0},
+]
+MISSIONS_WEEKLY = [
+    {"id": "explore12", "fa": "۱۲ بار اکتشاف انجام بده", "stat": "explore", "target": 12, "money": 1500, "rp": 0},
+    {"id": "mine2", "fa": "۲ معدن جدید کشف کن", "stat": "mines", "target": 2, "money": 1800, "rp": 0},
+    {"id": "fx8000", "fa": "در بورس و بازار ۸٬۰۰۰ 💰 معامله کن", "stat": "fx_value", "target": 8000, "money": 1200, "rp": 0},
+    {"id": "research3", "fa": "۳ تحقیق کامل کن", "stat": "research", "target": 3, "money": 0, "rp": 60},
+    {"id": "build4", "fa": "۴ ساختمان بساز", "stat": "built", "target": 4, "money": 1200, "rp": 0},
+    {"id": "tour2500", "fa": "۲٬۵۰۰ 💰 از گردشگری درآمد کسب کن", "stat": "tourism_income", "target": 2500, "money": 1500, "rp": 0},
+]
+
 # City specializations: each city has a level (1-5) and one specialization.
 # Effects scale with the city level (applied in logic.compute_mods / rates).
 CITY_SPECS = {
