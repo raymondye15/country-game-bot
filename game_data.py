@@ -9,7 +9,9 @@ RESOURCES = {
     "materials": "🧱 مصالح",
     "iron": "⛏️ آهن",
     "titanium": "🔩 تیتانیوم",
-    "special": "💎 منبع خاص سیاره",
+    "vexium": "💎 وکسیوم",
+    "deepoil": "🛢️ نفت ژرف",
+    "zyphgas": "🟣 گاز زیفرا",
 }
 
 PLANETS = {
@@ -19,6 +21,7 @@ PLANETS = {
         "capacity": 400,
         "special_name": "Vexium",
         "special_fa": "وکسیوم",
+        "special_res": "vexium",
         "desc": "سیاره‌ای خشک و بیابانی، فقیر از آب اما بسیار غنی از معدن. تجارت آب در آن طلاست.",
         "continents": {
             "kharun": {
@@ -53,6 +56,7 @@ PLANETS = {
         "capacity": 1000,
         "special_name": "Deep Oil",
         "special_fa": "نفت ژرف",
+        "special_res": "deepoil",
         "desc": "سیاره اقیانوسی؛ جزیره‌ها و قاره‌های ساحلی، غذای دریایی و تجارت دریایی قوی، معدن خشکی کم.",
         "continents": {
             "pelagia": {
@@ -87,6 +91,7 @@ PLANETS = {
         "capacity": 650,
         "special_name": "Zyph Gas",
         "special_fa": "گاز زیفرا",
+        "special_res": "zyphgas",
         "desc": "سیاره‌ای با آب‌وهوای متنوع؛ جنگل‌های متراکم، دشت‌ها و ناحیه‌های یخی. متعادل‌ترین سیاره.",
         "continents": {
             "verdania": {
@@ -166,10 +171,11 @@ BUILDINGS = {
     "powerplant":{"fa": "🔋 نیروگاه",       "cost": {"materials": 60, "iron": 20, "money": 300}, "upkeep": 9, "desc": "تولید انرژی"},
     "mine":      {"fa": "⛏️ معدن پیشرفته",  "cost": {"materials": 50, "money": 300},  "upkeep": 9,  "desc": "افزایش برداشت همه معادن"},
     "factory":   {"fa": "🏭 کارخانه",       "cost": {"materials": 80, "iron": 30, "money": 400}, "upkeep": 12, "desc": "تولید مصالح و درآمد"},
+    "refinery":  {"fa": "🧪 پالایشگاه",      "cost": {"materials": 90, "iron": 40, "money": 800}, "upkeep": 14, "desc": "مصرف منبع خاص سیارهٔ خودت؛ تولید انرژی و امتیاز تحقیق"},
     "university":{"fa": "🎓 دانشگاه",       "cost": {"materials": 70, "money": 500},  "upkeep": 15,  "desc": "امتیاز تحقیق روزانه"},
     "hospital":  {"fa": "🏥 بیمارستان",     "cost": {"materials": 60, "money": 400},  "upkeep": 12,  "desc": "رضایت و رشد جمعیت"},
     "barracks":  {"fa": "🪖 پادگان",        "cost": {"materials": 70, "iron": 20, "money": 350}, "upkeep": 11, "desc": "ظرفیت و قدرت ارتش"},
-    "airport_inter": {"fa": "🛸 فرودگاه بین‌سیاره‌ای", "cost": {"materials": 200, "iron": 200, "titanium": 80, "money": 6000}, "upkeep": 90, "desc": "مهاجرت و گردشگر از سیاره‌های دیگر"},
+    "airport_inter": {"fa": "🛸 فرودگاه بین‌سیاره‌ای", "cost": {"materials": 200, "iron": 200, "titanium": 80, "vexium": 15, "deepoil": 15, "zyphgas": 15, "money": 6000}, "upkeep": 90, "desc": "مهاجرت و گردشگر از سیاره‌های دیگر"},
     "hotel": {"fa": "🏨 هتل گردشگری", "cost": {"materials": 60, "money": 1200}, "upkeep": 15, "desc": "پذیرش گردشگر و درآمد از آن‌ها"},
 }
 
@@ -239,6 +245,13 @@ def city_upgrade_cost(level: int) -> dict:
         cost["iron"] = 15 * (level - 1)
     if level >= 4:
         cost["titanium"] = 10
+    # prestige tiers draw on ALL THREE planet specials -> interplanetary trade
+    if level == 3:
+        for k in ("vexium", "deepoil", "zyphgas"):
+            cost[k] = 8
+    if level >= 4:
+        for k in ("vexium", "deepoil", "zyphgas"):
+            cost[k] = 20
     return cost
 
 # Space program: a sequential chain of one-time projects. Costs may include
@@ -248,14 +261,14 @@ SPACE_PROJECTS = {
                   "cost": {"money": 5000, "iron": 150, "titanium": 60, "rp": 80},
                   "desc": "+۳ تحقیق در روز، +۱۵٪ ورودی گردشگر"},
     "telescope": {"fa": "🔭 آرایه تلسکوپ فضایی", "hours": 48, "score": 150, "rp_day": 6,
-                  "cost": {"money": 9000, "iron": 200, "titanium": 120, "special": 30, "rp": 150},
+                  "cost": {"money": 9000, "iron": 200, "titanium": 120, "vexium": 10, "deepoil": 10, "zyphgas": 10, "rp": 150},
                   "desc": "+۶ تحقیق در روز"},
     "station": {"fa": "🛸 ایستگاه فضایی", "hours": 72, "score": 300, "rp_day": 8,
-                "cost": {"money": 20000, "materials": 400, "iron": 350, "titanium": 200, "special": 80, "rp": 300},
+                "cost": {"money": 20000, "materials": 400, "iron": 350, "titanium": 200, "vexium": 25, "deepoil": 25, "zyphgas": 25, "rp": 300},
                 "desc": "+۸ تحقیق در روز، +۳۰٪ خرج گردشگرها"},
     "moonbase": {"fa": "🌕 پایگاه قمری", "hours": 96, "score": 500, "rp_day": 10,
-                 "cost": {"money": 45000, "materials": 800, "iron": 600, "titanium": 400, "special": 200, "rp": 600},
-                 "desc": "+۱۰ تحقیق در روز، +۶ ماده ویژه در روز از معادن ماه، +۳۰٪ ورودی گردشگر"},
+                 "cost": {"money": 45000, "materials": 800, "iron": 600, "titanium": 400, "vexium": 65, "deepoil": 65, "zyphgas": 65, "rp": 600},
+                 "desc": "+۱۰ تحقیق در روز، +۶ از منبع خاص سیاره‌ات در روز از معادن ماه، +۳۰٪ ورودی گردشگر"},
 }
 SPACE_ORDER = ["satellite", "telescope", "station", "moonbase"]
 
@@ -265,8 +278,8 @@ TOURISM_LEVELS = {
     1: {"money": 800, "materials": 40},
     2: {"money": 2000, "materials": 100, "iron": 40},
     3: {"money": 4500, "materials": 180, "iron": 120},
-    4: {"money": 9000, "materials": 300, "iron": 200, "titanium": 40},
-    5: {"money": 16000, "materials": 500, "iron": 350, "titanium": 120},
+    4: {"money": 9000, "materials": 300, "iron": 200, "titanium": 40, "vexium": 10, "deepoil": 10, "zyphgas": 10},
+    5: {"money": 16000, "materials": 500, "iron": 350, "titanium": 120, "vexium": 25, "deepoil": 25, "zyphgas": 25},
 }
 
 # Research tree: id -> data. branch, cost_rp, hours, prereq, effects (flat mods merged into country mods)
@@ -276,29 +289,29 @@ RESEARCH = {
     "eco2": {"branch": "اقتصاد و صنعت", "fa": "صنعت سنگین",      "cost": 45, "hours": 12, "prereq": "eco1", "effects": {"materials_prod": 0.20, "mine_prod": 0.10}, "desc": "مصالح +۲۰٪، معدن +۱۰٪"},
     "eco3": {"branch": "اقتصاد و صنعت", "fa": "بازار آزاد",      "cost": 70, "hours": 24, "prereq": "eco2", "effects": {"trade": 0.20, "economy": 0.10}, "desc": "تجارت +۲۰٪"},
     "eco4": {"branch": "اقتصاد و صنعت", "fa": "بانک مرکزی",      "cost": 110, "hours": 36, "prereq": "eco3", "effects": {"economy": 0.20}, "desc": "درآمد مالیاتی +۲۰٪"},
-    "eco5": {"branch": "اقتصاد و صنعت", "fa": "اقتصاد مداری",    "cost": 180, "hours": 48, "prereq": "eco4", "effects": {"economy": 0.20, "trade": 0.15}, "desc": "اقتصاد و تجارت مداری"},
+    "eco5": {"branch": "اقتصاد و صنعت", "fa": "اقتصاد مداری",    "cost": 180, "hours": 48, "prereq": "eco4", "effects": {"economy": 0.20, "trade": 0.15}, "res_cost": {"vexium": 15, "deepoil": 15, "zyphgas": 15}, "desc": "اقتصاد و تجارت مداری"},
     # military
     "mil1": {"branch": "نظامی", "fa": "سربازگیری سازمان‌یافته", "cost": 20, "hours": 6,  "prereq": None,   "effects": {"military": 0.10}, "desc": "قدرت ارتش +۱۰٪"},
     "mil2": {"branch": "نظامی", "fa": "تسلیحات سبک",            "cost": 45, "hours": 12, "prereq": "mil1", "effects": {"military": 0.12}, "desc": "قدرت ارتش +۱۲٪"},
     "mil3": {"branch": "نظامی", "fa": "واحدهای زرهی",           "cost": 80, "hours": 24, "prereq": "mil2", "effects": {"military": 0.15}, "desc": "قدرت ارتش +۱۵٪"},
     "mil4": {"branch": "نظامی", "fa": "سامانه‌های موشکی",        "cost": 130, "hours": 36, "prereq": "mil3", "effects": {"military": 0.18}, "desc": "قدرت ارتش +۱۸٪"},
-    "mil5": {"branch": "نظامی", "fa": "دفاع مداری",              "cost": 200, "hours": 48, "prereq": "mil4", "effects": {"military": 0.20, "defense": 0.20}, "desc": "حمله و دفاع مداری"},
+    "mil5": {"branch": "نظامی", "fa": "دفاع مداری",              "cost": 200, "hours": 48, "prereq": "mil4", "effects": {"military": 0.20, "defense": 0.20}, "res_cost": {"vexium": 15, "deepoil": 15, "zyphgas": 15}, "desc": "حمله و دفاع مداری"},
     # logistics
     "log1": {"branch": "زیرساخت و لجستیک", "fa": "تیم‌های اکتشاف پیشرفته", "cost": 25, "hours": 8,  "prereq": None,   "effects": {"explore_cap": 6},  "desc": "ظرفیت شارژ اکتشاف: ۶"},
     "log2": {"branch": "زیرساخت و لجستیک", "fa": "راه‌سازی قاره‌ای",        "cost": 50, "hours": 16, "prereq": "log1", "effects": {"explore": 0.10}, "desc": "مقدار هر اکتشاف +۱۰٪"},
     "log3": {"branch": "زیرساخت و لجستیک", "fa": "شبکه لجستیک قاره‌ای",    "cost": 90, "hours": 30, "prereq": "log2", "effects": {"explore_cap": 12}, "desc": "ظرفیت شارژ اکتشاف: ۱۲"},
-    "log4": {"branch": "زیرساخت و لجستیک", "fa": "ناوگان حمل‌ونقل سنگین",   "cost": 140, "hours": 40, "prereq": "log3", "effects": {"explore": 0.15, "trade": 0.10}, "desc": "اکتشاف و تجارت سریع‌تر"},
+    "log4": {"branch": "زیرساخت و لجستیک", "fa": "ناوگان حمل‌ونقل سنگین",   "cost": 140, "hours": 40, "prereq": "log3", "effects": {"explore": 0.15, "trade": 0.10}, "res_cost": {"vexium": 10, "deepoil": 10, "zyphgas": 10}, "desc": "اکتشاف و تجارت سریع‌تر"},
     # science
     "sci1": {"branch": "علم و فضا", "fa": "آموزش عالی همگانی",  "cost": 25, "hours": 8,  "prereq": None,   "effects": {"research_speed": 0.15}, "desc": "سرعت تحقیق +۱۵٪"},
     "sci2": {"branch": "علم و فضا", "fa": "رایانش پیشرفته",     "cost": 55, "hours": 16, "prereq": "sci1", "effects": {"research_speed": 0.15, "economy": 0.05}, "desc": "تحقیق +۱۵٪"},
     "sci3": {"branch": "علم و فضا", "fa": "انرژی همجوشی",       "cost": 100, "hours": 30, "prereq": "sci2", "effects": {"energy_prod": 0.40}, "desc": "تولید انرژی +۴۰٪"},
-    "sci4": {"branch": "علم و فضا", "fa": "زیست‌فناوری",        "cost": 150, "hours": 40, "prereq": "sci3", "effects": {"food_prod": 0.25, "pop_growth": 0.15}, "desc": "غذا و رشد جمعیت"},
-    "sci5": {"branch": "علم و فضا", "fa": "هوش مصنوعی سیاره‌ای", "cost": 220, "hours": 60, "prereq": "sci4", "effects": {"research_speed": 0.25, "economy": 0.15, "military": 0.10}, "desc": "جهش همه‌جانبه"},
+    "sci4": {"branch": "علم و فضا", "fa": "زیست‌فناوری",        "cost": 150, "hours": 40, "prereq": "sci3", "effects": {"food_prod": 0.25, "pop_growth": 0.15}, "res_cost": {"vexium": 10, "deepoil": 10, "zyphgas": 10}, "desc": "غذا و رشد جمعیت"},
+    "sci5": {"branch": "علم و فضا", "fa": "هوش مصنوعی سیاره‌ای", "cost": 220, "hours": 60, "prereq": "sci4", "effects": {"research_speed": 0.25, "economy": 0.15, "military": 0.10}, "res_cost": {"vexium": 15, "deepoil": 15, "zyphgas": 15}, "desc": "جهش همه‌جانبه"},
     # society
     "soc1": {"branch": "جامعه و حکومت", "fa": "رفاه اجتماعی",   "cost": 20, "hours": 6,  "prereq": None,   "effects": {"happiness": 5}, "desc": "رضایت پایه +۵"},
     "soc2": {"branch": "جامعه و حکومت", "fa": "بهداشت عمومی",   "cost": 45, "hours": 14, "prereq": "soc1", "effects": {"pop_growth": 0.15, "happiness": 3}, "desc": "رشد جمعیت و رضایت"},
     "soc3": {"branch": "جامعه و حکومت", "fa": "اتحاد ملی",      "cost": 80, "hours": 24, "prereq": "soc2", "effects": {"stability": 0.25}, "desc": "مقاومت در برابر اعتراض +۲۵٪"},
-    "soc4": {"branch": "جامعه و حکومت", "fa": "فرهنگ فضایی",    "cost": 130, "hours": 36, "prereq": "soc3", "effects": {"happiness": 6, "research_speed": 0.10}, "desc": "رضایت و تحقیق"},
+    "soc4": {"branch": "جامعه و حکومت", "fa": "فرهنگ فضایی",    "cost": 130, "hours": 36, "prereq": "soc3", "effects": {"happiness": 6, "research_speed": 0.10}, "res_cost": {"vexium": 10, "deepoil": 10, "zyphgas": 10}, "desc": "رضایت و تحقیق"},
     # planet specials
     "sp_vexus_1": {"branch": "ویژه سیاره", "fa": "تصفیه آب بیابانی",   "cost": 40, "hours": 14, "prereq": None, "planet": "vexus",    "effects": {"water_prod": 0.35}, "desc": "تولید آب در وکسوس +۳۵٪"},
     "sp_vexus_2": {"branch": "ویژه سیاره", "fa": "استخراج وکسیوم ژرف", "cost": 90, "hours": 28, "prereq": "sp_vexus_1", "planet": "vexus", "effects": {"mine_prod": 0.25}, "desc": "برداشت معدن +۲۵٪"},

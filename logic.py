@@ -124,7 +124,7 @@ def new_country(user_id: int, planet: str, continent: str, government: str,
         "planet": planet, "continent": continent, "government": government,
         "population": pop, "area": area, "initial_area": area,
         "money": 1500, "rp": 10,
-        "res": {"food": 2000, "water": 2000, "energy": 3000, "materials": 300, "iron": 120, "titanium": 40, "special": 20},
+        "res": {"food": 2000, "water": 2000, "energy": 3000, "materials": 300, "iron": 120, "titanium": 40, "vexium": 0, "deepoil": 0, "zyphgas": 0, PLANETS[planet]["special_res"]: 20},
         "mines": mines,
         "buildings": {"farm": 3, "waterplant": 3, "powerplant": 1, "mine": 1, "factory": 1, "university": 0, "hospital": 0, "barracks": 0},
         "soldiers": 0, "accept_migrants": True, "tourism_level": 0, "tourists": 0.0, "fin_trade": 0, "last_fin": {}, "fin_day": {}, "carry": {},
@@ -251,6 +251,29 @@ def military_power(c: dict) -> int:
 def defense_power(c: dict) -> int:
     return int(military_power(c) * (1 + mod(c, "defense")))
 
+SPECIAL_RES = ("vexium", "deepoil", "zyphgas")
+REFINERY_BURN = 10      # own-planet special burned per refinery per day
+REFINERY_ENERGY = 12    # energy produced per unit burned
+REFINERY_RP = 0.6       # research points per unit burned
+
+def own_special(c: dict) -> str:
+    """The special resource of the country's own planet."""
+    return PLANETS[c["planet"]]["special_res"]
+
+def migrate_special_split(c: dict) -> bool:
+    """One-time, idempotent: fold the legacy single 'special' stock into the
+    country's OWN planet special and make sure all three keys exist.
+    Returns True when the country doc changed."""
+    res = c["res"]; changed = False
+    for k in SPECIAL_RES:
+        if k not in res:
+            res[k] = 0; changed = True
+    if "special" in res:
+        own = own_special(c)
+        res[own] = res.get(own, 0) + res.pop("special")
+        changed = True
+    return changed
+
 def production(c: dict) -> dict:
     """Gross daily production of every resource (used by the tick and the finance view)."""
     b = c["buildings"]
@@ -260,15 +283,17 @@ def production(c: dict) -> dict:
         "water": (3000 + b.get("waterplant", 0) * 4000) * (1 + mod(c, "water_prod")),
         "energy": (2500 + b.get("powerplant", 0) * 3500) * (1 + mod(c, "energy_prod")),
         "materials": (150 + b.get("factory", 0) * 220) * (1 + mod(c, "materials_prod")),
-        "iron": 0, "titanium": 0, "special": 0,
+        "iron": 0, "titanium": 0, "vexium": 0, "deepoil": 0, "zyphgas": 0,
     }
     mine_factor = 1.4 if law(c) == "mining_rush" else 1.0
+    own = own_special(c)
     for r, cnt in c["mines"].items():
-        prod[r] = prod.get(r, 0) + cnt * 90 * mine_bonus * (1 + mod(c, "mine_prod")) * mine_factor
+        key = own if r == "special" else r
+        prod[key] = prod.get(key, 0) + cnt * 90 * mine_bonus * (1 + mod(c, "mine_prod")) * mine_factor
     if law(c) == "food_program":
         prod["food"] *= 1.25
     if "moonbase" in space_done(c):
-        prod["special"] = prod.get("special", 0) + 6
+        prod[own] = prod.get(own, 0) + 6
     return prod
 
 # ---------------------------------------------------------------- scores
@@ -276,10 +301,10 @@ def production(c: dict) -> dict:
 # (no stored fields, so no DB migration). Shown in the country/finance views
 # and used by the leaderboard tabs.
 RES_PRICE = {"food": 0.06, "water": 0.06, "energy": 0.08, "materials": 1.0,
-             "iron": 1.5, "titanium": 4.0, "special": 6.0}
+             "iron": 1.5, "titanium": 4.0, "vexium": 6.0, "deepoil": 6.0, "zyphgas": 6.0}
 BUILDING_SCORE = {"farm": 10, "waterplant": 10, "powerplant": 20, "mine": 25,
                   "factory": 30, "university": 25, "hospital": 20, "barracks": 20,
-                  "airport_inter": 100, "hotel": 15}
+                  "airport_inter": 100, "hotel": 15, "refinery": 25}
 
 def eco_score(c: dict):
     """Economic score: daily production value (main weight) + infrastructure
@@ -451,6 +476,20 @@ def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
     b = c["buildings"]
     carry = c.setdefault("carry", {})
     econ_tick(c, hours / 24)
+    # refinery: burns the country's OWN planet special -> energy + research
+    n_ref = b.get("refinery", 0)
+    if n_ref:
+        own = own_special(c)
+        burn_f = carry.get("ref_burn", 0.0) + n_ref * REFINERY_BURN * hours / 24
+        burn = int(burn_f); carry["ref_burn"] = burn_f - burn
+        used = min(burn, int(max(0.0, c["res"].get(own, 0))))
+        if used > 0:
+            c["res"][own] -= used
+            c["res"]["energy"] = c["res"].get("energy", 0) + used * REFINERY_ENERGY
+            ref_f = carry.get("ref_rp", 0.0) + used * REFINERY_RP
+            ref_add = int(ref_f); carry["ref_rp"] = ref_f - ref_add
+            c["rp"] += ref_add
+            c["day_rp"] = c.get("day_rp", 0) + ref_add
     shortage = any(c["res"][r] <= 0 for r in ("food", "water", "energy"))
     if shortage:
         c["shortage_hours"] = c.get("shortage_hours", 0) + hours

@@ -107,7 +107,7 @@ GUIDE_TEXT = (
     "• 🏖️ گردشگری: هتل بساز، صنعت گردشگری را ارتقا بده و از گردشگرها (با فرودگاه بین‌سیاره‌ای حتی از سیاره‌های دیگر) درآمد بگیر. امتیاز گردشگری جدا حساب می‌شود و در قدرت ملی هم اثر دارد.",
     "• 📈 بورس جهانی: همه منابع قیمت لحظه‌ای دارند که هر ساعت با عرضه/تقاضا و معاملات بازیکن‌ها تغییر می‌کند؛ از بخش تجارت می‌توانی فوری بخری و بفروشی. در ترید و بازار، اگر قیمت یک معامله خیلی بالاتر از قیمت جهانی باشد، ربات به طرف مقابل هشدار می‌دهد.",
     "• 🏙️ شهرها: هر شهر تا سطح ۵ ارتقا می‌گیرد و یک تخصص دارد (کشاورزی، صنعتی، علمی، توریستی یا تجاری) که اثرش با سطح شهر بیشتر می‌شود. تغییر تخصص ۴۰۰ 💰 هزینه دارد.",
-    "• 🚀 برنامه فضایی: زنجیره‌ای از پروژه‌ها (ماهواره، تلسکوپ، ایستگاه فضایی، پایگاه قمری) که به ترتیب ساخته می‌شوند؛ تحقیق روزانه، گردشگری و امتیاز علمی را بالا می‌برند و پایگاه قمری ماده ویژه تولید می‌کند.",
+    "• 🚀 برنامه فضایی: زنجیره‌ای از پروژه‌ها (ماهواره، تلسکوپ، ایستگاه فضایی، پایگاه قمری) که به ترتیب ساخته می‌شوند؛ تحقیق روزانه، گردشگری و امتیاز علمی را بالا می‌برند و پایگاه قمری از منبع خاص سیاره‌ات تولید می‌کند.",
     "• 🗳️ شورای بین‌سیاره‌ای (IC): هر دوره از بین ۴ قانون نامزد رأی می‌دهی؛ قانون برنده تا دوره بعد روی همه کشورها اعمال می‌شود (صلح، رونق گردشگری، بازار آزاد و...). هر کشور یک رأی دارد و می‌توانی رأیت را عوض کنی.",
     "• 🎯 مأموریت و دستاورد: هر روز و هر هفته یک مأموریت با جایزه داری (اکتشاف، کشف معدن، معامله در بورس، درآمد گردشگری و...) و ۱۲ دستاورد دائمی با مدال و جایزه در پروفایل کشورت ثبت می‌شود."
     "• 👶 زاد و ولد و مرگ‌ومیر: هر ساعت در کشورت تولد و مرگ رخ می‌دهد؛ رضایت بالا و بیمارستان تولد را بیشتر و مرگ‌ومیر را کمتر می‌کند و گرسنگی مرگ‌ومیر را شدید بالا می‌برد. همه سیستم‌های زنده بازی (اقتصاد، جمعیت، رضایت، امتیاز تحقیق، مهاجرت) ساعتی کار می‌کنند؛ گزارش کامل هر روز می‌آید.\n"
@@ -490,7 +490,9 @@ def research_view(c: dict, back: bool = False):
             else:
                 mc = research_money_cost(r)
                 mc_txt = f" + {mc:,} 💰" if mc else ""
-                lines.append(f"• {r['fa']} — {r['desc']} | هزینه {r['cost']} امتیاز{mc_txt}، {r['hours']} ساعت")
+                rc = r.get("res_cost")
+                rc_txt = f" + {cost_text(rc)}" if rc else ""
+                lines.append(f"• {r['fa']} — {r['desc']} | هزینه {r['cost']} امتیاز{mc_txt}{rc_txt}، {r['hours']} ساعت")
                 kb.button(text=f"تحقیق: {r['fa']}", callback_data=f"research:start:{rid}")
     kb.adjust(1)
     if back:
@@ -513,8 +515,13 @@ async def research_start(cb: types.CallbackQuery):
     mc = research_money_cost(r)
     if c["money"] < mc:
         await cb.answer(f"پول کافی برای این تحقیق نداری ({c['money']:,}/{mc:,} 💰)", show_alert=True); return
+    rc = r.get("res_cost")
+    if rc and not can_pay(c, rc):
+        await cb.answer("منبع خاص کافی نداری — این تحقیق از هر سه نوع (وکسیوم، نفت ژرف، گاز زیفرا) می‌خواهد.", show_alert=True); return
     c["rp"] -= r["cost"]
     c["money"] -= mc
+    if rc:
+        pay_cost(c, rc)
     hours = r["hours"] / (1 + logic.mod(c, "research_speed"))
     c["researching"] = {"id": rid, "finish_ts": logic.now_ts() + int(hours * 3600)}
     await dbm.save_country(c)
@@ -2066,11 +2073,25 @@ async def run_tick() -> dict:
             {"$set": {"prev": mkt["prices"], "prices": new_prices, "pressure": {}, "updated": t}},
             upsert=True)
     countries = await dbm.all_alive_countries()
+    # one-time migration: legacy 'special' offers/trades -> seller's planet special
+    _planet_of = {c["user_id"]: c["planet"] for c in countries}
+    async for o in dbm.db.trade_offers.find({"resource": "special"}):
+        pl = _planet_of.get(o["seller_id"])
+        if pl:
+            await dbm.db.trade_offers.update_one({"_id": o["_id"]},
+                {"$set": {"resource": PLANETS[pl]["special_res"]}})
+    async for tr in dbm.db.direct_trades.find({"resource": "special", "status": "pending"}):
+        pl = _planet_of.get(tr["seller_id"])
+        if pl:
+            await dbm.db.direct_trades.update_one({"_id": tr["_id"]},
+                {"$set": {"resource": PLANETS[pl]["special_res"]}})
     _council0 = await get_council()
     for c in countries:
         changed = False
         if c.get("active_law") != _council0.get("active"):
             c["active_law"] = _council0.get("active"); changed = True
+        if logic.migrate_special_split(c):
+            changed = True
         # inactivity freeze flag (14 days)
         if t - c.get("last_seen_ts", t) > 14 * logic.DAY and not c.get("frozen"):
             c["frozen"] = True; changed = True; stats["frozen"] += 1
