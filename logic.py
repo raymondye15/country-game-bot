@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pure game logic operating on country dicts (no Telegram / DB imports -> unit-testable)."""
 import math, random, time
-from game_data import PLANETS, GOVERNMENTS, RESEARCH, BUILDINGS, RANDOM_EVENTS, RESOURCES, TOURISM_LEVELS, SPACE_PROJECTS, ACHIEVEMENTS
+from game_data import PLANETS, GOVERNMENTS, RESEARCH, BUILDINGS, RANDOM_EVENTS, RESOURCES, TOURISM_LEVELS, SPACE_PROJECTS, ACHIEVEMENTS, POLICIES
 
 HOUR = 3600
 DAY = 86400
@@ -29,6 +29,10 @@ def compute_mods(c: dict) -> dict:
     for rid in c.get("researched", []):
         if rid in RESEARCH:
             add(RESEARCH[rid]["effects"])
+    for cat, opt in c.get("policies", {}).items():
+        p = POLICIES.get(cat, {}).get("options", {}).get(opt)
+        if p:
+            add(p.get("effects", {}))
     for city in c.get("cities", []):
         spec = city.get("spec"); lvl = city.get("level", 1)
         if spec == "agri":
@@ -127,7 +131,7 @@ def new_country(user_id: int, planet: str, continent: str, government: str,
         "res": {"food": 2000, "water": 2000, "energy": 3000, "materials": 300, "iron": 120, "titanium": 40, "vexium": 0, "deepoil": 0, "zyphgas": 0, PLANETS[planet]["special_res"]: 20},
         "mines": mines,
         "buildings": {"farm": 3, "waterplant": 3, "powerplant": 1, "mine": 1, "factory": 1, "university": 0, "hospital": 0, "barracks": 0},
-        "soldiers": 0, "accept_migrants": True, "tourism_level": 0, "tourists": 0.0, "fin_trade": 0, "last_fin": {}, "fin_day": {}, "carry": {},
+        "soldiers": 0, "accept_migrants": True, "policies": {}, "policy_ts": {}, "tourism_level": 0, "tourists": 0.0, "fin_trade": 0, "last_fin": {}, "fin_day": {}, "carry": {},
         "day_births": 0, "day_deaths": 0, "day_pool": 0, "day_rp": 0,
         "last_births": 0, "last_deaths": 0, "last_mig_in": [], "last_mig_out": 0,
         "protest_hours": 0, "shortage_hours": 0,
@@ -361,6 +365,8 @@ def tourism_rates(c: dict) -> dict:
     if offplanet:
         arrivals *= 1.6
         spend *= 1.5   # off-planet tourists are richer
+    arrivals *= 1 + mod(c, "tourism_arrivals")
+    spend *= 1 + mod(c, "tourism_spend")
     return {"arrivals": arrivals, "spend": spend, "cap": hotels * 300, "offplanet": offplanet}
 
 def next_market_price(price: float, base: float, net_volume: float, rng) -> float:
@@ -426,6 +432,7 @@ def plan_migration(countries: list, frac: float = 1.0) -> list:
         dst = max(reachable, key=lambda d: d["happiness"])
         headroom = int(capacity(dst) * 1.05 - dst["population"])
         amount = min(int(src_c["population"] * 0.002 * frac), int(3000 * frac), headroom)
+        amount = int(amount * (1 + mod(src_c, "emigration")))
         if amount >= max(1, int(100 * frac)):
             moves.append((src_c["user_id"], dst["user_id"], amount))
     return moves
@@ -448,11 +455,11 @@ def econ_tick(c: dict, frac: float = 1.0):
         carry[r] = total - applied
         c["res"][r] = max(0, int(c["res"].get(r, 0) + applied))
     tax_factor = {1: 0.6, 2: 1.0, 3: 1.6}[c["tax_rate"]]
-    income = c["population"] * TAX_PER_CAPITA * tax_factor * (1 + mod(c, "economy"))
+    income = c["population"] * TAX_PER_CAPITA * tax_factor * (1 + mod(c, "economy")) * (1 + mod(c, "tax"))
     ub = building_upkeep(c)
-    ua = c.get("soldiers", 0) * 0.15
-    civic = c["population"] * 0.0008
-    factory_income = b.get("factory", 0) * FACTORY_INCOME
+    ua = c.get("soldiers", 0) * 0.15 * (1 + mod(c, "soldier_upkeep"))
+    civic = c["population"] * 0.0008 * (1 + mod(c, "civic"))
+    factory_income = b.get("factory", 0) * FACTORY_INCOME * (1 + mod(c, "factory"))
     if law(c) == "industrial_boom":
         factory_income = int(factory_income * 1.5)
     net = (income + factory_income - ub - ua - civic) * frac
@@ -485,8 +492,8 @@ def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
         used = min(burn, int(max(0.0, c["res"].get(own, 0))))
         if used > 0:
             c["res"][own] -= used
-            c["res"]["energy"] = c["res"].get("energy", 0) + used * REFINERY_ENERGY
-            ref_f = carry.get("ref_rp", 0.0) + used * REFINERY_RP
+            c["res"]["energy"] = c["res"].get("energy", 0) + used * REFINERY_ENERGY * (1 + mod(c, "refinery"))
+            ref_f = carry.get("ref_rp", 0.0) + used * REFINERY_RP * (1 + mod(c, "refinery"))
             ref_add = int(ref_f); carry["ref_rp"] = ref_f - ref_add
             c["rp"] += ref_add
             c["day_rp"] = c.get("day_rp", 0) + ref_add
@@ -526,6 +533,8 @@ def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
         deaths_rate *= 2.3
     if c.get("war_id"):
         deaths_rate += 0.0004
+    births_rate *= 1 + mod(c, "births")
+    deaths_rate *= 1 + mod(c, "deaths")
     ratio = c["population"] / max(1, capacity(c))
     damp = max(0.0, 1 - (ratio - 0.8) / 0.4) if ratio > 0.8 else 1.0
     bf = carry.get("births", 0.0) + c["population"] * births_rate * damp * hours / 24
@@ -549,6 +558,7 @@ def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
             mig = min(int(c["population"] * 0.0015 * attract * hours / 24), headroom)
             if law(c) == "open_borders":
                 mig = min(mig * 2, headroom)
+            mig = min(int(mig * (1 + mod(c, "migration"))), headroom)
             if mig > 0:
                 c["population"] += mig
                 adjust_cities(c, mig)
@@ -569,7 +579,7 @@ def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
             fd = c.setdefault("fin_day", {}); fd["tourism"] = fd.get("tourism", 0) + tour_income
         c["day_tour_arr"] = c.get("day_tour_arr", 0) + arr_h
     # protests & collapse (hour counters; collapse needs ~3+ days under 15%)
-    stability = 1 - mod(c, "stability")
+    stability = 1 + mod(c, "stability")  # higher stability = collapse takes LONGER (the old 1-x inverted it)
     if c["happiness"] < 30:
         c["protest_hours"] = c.get("protest_hours", 0) + hours
     else:

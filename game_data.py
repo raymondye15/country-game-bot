@@ -179,6 +179,64 @@ BUILDINGS = {
     "hotel": {"fa": "🏨 هتل گردشگری", "cost": {"materials": 60, "money": 1200}, "upkeep": 15, "desc": "پذیرش گردشگر و درآمد از آن‌ها"},
 }
 
+# Domestic policies: the player picks ONE option per category (or none).
+# Effects merge into logic.compute_mods like research effects; a few keys are
+# read directly where they apply (tax, factory, civic, soldier_upkeep, births,
+# deaths, migration, emigration, tourism_arrivals, tourism_spend, refinery,
+# space_time, trade = market-fee discount). Changing a category locks it 12h.
+POLICIES = {
+    "economy": {"fa": "💵 اقتصاد و مالیات", "options": {
+        "tax_haven": {"fa": "بهشت مالیاتی", "desc": "مالیات −۱۵٪ | کارمزد بازار کمتر | ورودی گردشگر +۱۵٪", "effects": {"tax": -0.15, "trade": 0.20, "tourism_arrivals": 0.15}},
+        "wealth_tax": {"fa": "مالیات بر ثروت", "desc": "مالیات +۱۵٪ | رضایت −۳", "effects": {"tax": 0.15, "happiness": -3}},
+        "state_econ": {"fa": "اقتصاد دولتی", "desc": "درآمد کارخانه +۲۵٪ | کارمزد بازار بیشتر", "effects": {"factory": 0.25, "trade": -0.15}},
+    }},
+    "migration": {"fa": "👥 مهاجرت", "options": {
+        "open_doors": {"fa": "درهای باز", "desc": "مهاجرت ورودی ×۲ | رضایت −۲", "effects": {"migration": 1.0, "happiness": -2}},
+        "closed": {"fa": "مرز بسته", "desc": "مهاجرت ورودی صفر | خروج مردم −۸۰٪ | ثبات +۱۵٪", "effects": {"migration": -1.0, "emigration": -0.8, "stability": 0.15}},
+        "elites": {"fa": "جذب نخبگان", "desc": "مهاجرت ورودی +۳۰٪ | سرعت تحقیق +۵٪", "effects": {"migration": 0.3, "research_speed": 0.05}},
+    }},
+    "welfare": {"fa": "🏥 رفاه و بهداشت", "options": {
+        "generous": {"fa": "رفاه سخاوتمندانه", "desc": "رضایت +۶ | تولد +۱۰٪ | هزینه شهری +۴۰٪", "effects": {"happiness": 6, "births": 0.10, "civic": 0.40}},
+        "insurance": {"fa": "بیمه همگانی", "desc": "مرگ‌ومیر −۲۰٪ | هزینه شهری +۲۰٪", "effects": {"deaths": -0.20, "civic": 0.20}},
+        "minimal": {"fa": "دولت حداقلی", "desc": "هزینه شهری −۴۰٪ | رضایت −۵ | مرگ‌ومیر +۱۰٪", "effects": {"civic": -0.40, "happiness": -5, "deaths": 0.10}},
+    }},
+    "education": {"fa": "🎓 آموزش", "options": {
+        "free_edu": {"fa": "آموزش رایگان", "desc": "سرعت تحقیق +۱۵٪ | هزینه شهری +۱۵٪", "effects": {"research_speed": 0.15, "civic": 0.15}},
+        "technical": {"fa": "آموزش فنی‌وحرفه‌ای", "desc": "درآمد کارخانه +۱۵٪ | تولید مصالح +۱۰٪ | سرعت تحقیق −۵٪", "effects": {"factory": 0.15, "materials_prod": 0.10, "research_speed": -0.05}},
+        "military_edu": {"fa": "آموزش نظامی", "desc": "قدرت ارتش +۱۰٪ | سرعت تحقیق −۵٪", "effects": {"military": 0.10, "research_speed": -0.05}},
+    }},
+    "military": {"fa": "🪖 نظامی", "options": {
+        "conscription": {"fa": "سربازی اجباری", "desc": "هزینه سرباز −۵۰٪ | قدرت ارتش +۱۰٪ | رضایت −۴", "effects": {"soldier_upkeep": -0.50, "military": 0.10, "happiness": -4}},
+        "professional": {"fa": "ارتش حرفه‌ای", "desc": "هزینه سرباز +۵۰٪ | قدرت ارتش +۲۰٪", "effects": {"soldier_upkeep": 0.50, "military": 0.20}},
+        "pacifist": {"fa": "صلح‌طلبی", "desc": "ارتش و دفاع −۱۵٪ | رضایت +۴ | ورودی گردشگر +۱۰٪", "effects": {"military": -0.15, "defense": -0.15, "happiness": 4, "tourism_arrivals": 0.10}},
+    }},
+    "energy": {"fa": "🌱 انرژی و محیط زیست", "options": {
+        "green": {"fa": "انرژی سبز", "desc": "تولید انرژی +۱۵٪ | برداشت معدن −۱۰٪ | ورودی گردشگر +۱۰٪", "effects": {"energy_prod": 0.15, "mine_prod": -0.10, "tourism_arrivals": 0.10}},
+        "industry_first": {"fa": "صنعت به هر قیمت", "desc": "برداشت معدن +۲۰٪ | درآمد کارخانه +۱۵٪ | رضایت −۵ | ورودی گردشگر −۱۵٪", "effects": {"mine_prod": 0.20, "factory": 0.15, "happiness": -5, "tourism_arrivals": -0.15}},
+        "eco_protection": {"fa": "حفاظت محیط زیست", "desc": "رضایت +۲ | ورودی گردشگر +۱۵٪ | تولید انرژی −۱۰٪ | برداشت معدن −۵٪", "effects": {"happiness": 2, "tourism_arrivals": 0.15, "energy_prod": -0.10, "mine_prod": -0.05}},
+    }},
+    "culture": {"fa": "🏖️ فرهنگ و گردشگری", "options": {
+        "tourist_open": {"fa": "کشور توریستی", "desc": "ورودی گردشگر +۲۵٪ | خرج گردشگر +۱۰٪ | ثبات −۱۵٪", "effects": {"tourism_arrivals": 0.25, "tourism_spend": 0.10, "stability": -0.15}},
+        "traditional": {"fa": "فرهنگ سنتی", "desc": "ورودی گردشگر −۲۰٪ | رضایت +۵ | ثبات +۲۵٪", "effects": {"tourism_arrivals": -0.20, "happiness": 5, "stability": 0.25}},
+        "festival": {"fa": "جشنواره دائمی", "desc": "خرج گردشگر +۲۵٪ | هزینه شهری +۲۰٪", "effects": {"tourism_spend": 0.25, "civic": 0.20}},
+    }},
+    "industry": {"fa": "🔬 صنعت و فناوری", "options": {
+        "tech_hub": {"fa": "قطب فناوری", "desc": "سرعت تحقیق +۱۰٪ | بازده پالایشگاه +۵۰٪", "effects": {"research_speed": 0.10, "refinery": 0.50}},
+        "self_sufficiency": {"fa": "خودکفایی", "desc": "غذا، آب و انرژی +۱۰٪ | کارمزد بازار بیشتر", "effects": {"food_prod": 0.10, "water_prod": 0.10, "energy_prod": 0.10, "trade": -0.10}},
+        "free_trade": {"fa": "تجارت آزاد جهانی", "desc": "کارمزد بازار خیلی کمتر | درآمد کارخانه −۱۰٪", "effects": {"trade": 0.25, "factory": -0.10}},
+    }},
+    "order": {"fa": "⚖️ نظم و آزادی", "options": {
+        "authoritarian": {"fa": "دولت مقتدر", "desc": "ثبات +۴۰٪ (فروپاشی خیلی دیرتر) | رضایت −۶", "effects": {"stability": 0.40, "happiness": -6}},
+        "civil_liberty": {"fa": "آزادی مدنی", "desc": "رضایت +۶ | ثبات −۲۰٪ | سرعت تحقیق +۵٪", "effects": {"happiness": 6, "stability": -0.20, "research_speed": 0.05}},
+        "justice": {"fa": "عدالت و تعادل", "desc": "ثبات +۱۵٪ | رضایت +۲", "effects": {"stability": 0.15, "happiness": 2}},
+    }},
+    "space": {"fa": "🚀 فضا", "options": {
+        "space_focus": {"fa": "تمرکز فضایی", "desc": "زمان ساخت پروژه‌های فضایی −۲۵٪ | سرعت تحقیق +۵٪", "effects": {"space_time": -0.25, "research_speed": 0.05}},
+        "earth_first": {"fa": "زمین اول", "desc": "زمان ساخت پروژه‌های فضایی +۲۵٪ | تولید غذا +۱۰٪", "effects": {"space_time": 0.25, "food_prod": 0.10}},
+        "space_diplomacy": {"fa": "دیپلماسی فضایی", "desc": "زمان فضایی −۱۰٪ | کارمزد بازار کمتر | ورودی گردشگر +۵٪", "effects": {"space_time": -0.10, "trade": 0.10, "tourism_arrivals": 0.05}},
+    }},
+}
+
 # Interplanetary Council (IC) laws: players vote each term; the winning law
 # applies to EVERY country until the next term. Effects live in logic.py
 # (via c["active_law"]) and in main.py (market fees, war declarations).

@@ -20,7 +20,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db as dbm
 import logic
-from game_data import PLANETS, GOVERNMENTS, BUILDINGS, RESEARCH, RESOURCES, DIRECTIONS, TOURISM_LEVELS, CITY_SPECS, SPACE_PROJECTS, SPACE_ORDER, city_upgrade_cost, LAWS, ACHIEVEMENTS, MISSIONS_DAILY, MISSIONS_WEEKLY
+from game_data import PLANETS, GOVERNMENTS, BUILDINGS, RESEARCH, RESOURCES, DIRECTIONS, TOURISM_LEVELS, CITY_SPECS, SPACE_PROJECTS, SPACE_ORDER, city_upgrade_cost, LAWS, ACHIEVEMENTS, MISSIONS_DAILY, MISSIONS_WEEKLY, POLICIES
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("gamebot")
@@ -69,6 +69,7 @@ def main_kb(selective: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🏖️ گردشگری"), KeyboardButton(text="❓ راهنما")],
         [KeyboardButton(text="🏙️ شهرها"), KeyboardButton(text="🚀 برنامه فضایی")],
         [KeyboardButton(text="🗳️ شورای بین‌سیاره‌ای"), KeyboardButton(text="🎯 مأموریت و دستاورد")],
+        [KeyboardButton(text="📜 سیاست‌های داخلی")],
         [KeyboardButton(text="✖️ بستن منو")],
     ])
 
@@ -109,7 +110,8 @@ GUIDE_TEXT = (
     "• 🏙️ شهرها: هر شهر تا سطح ۵ ارتقا می‌گیرد و یک تخصص دارد (کشاورزی، صنعتی، علمی، توریستی یا تجاری) که اثرش با سطح شهر بیشتر می‌شود. تغییر تخصص ۴۰۰ 💰 هزینه دارد.",
     "• 🚀 برنامه فضایی: زنجیره‌ای از پروژه‌ها (ماهواره، تلسکوپ، ایستگاه فضایی، پایگاه قمری) که به ترتیب ساخته می‌شوند؛ تحقیق روزانه، گردشگری و امتیاز علمی را بالا می‌برند و پایگاه قمری از منبع خاص سیاره‌ات تولید می‌کند.",
     "• 🗳️ شورای بین‌سیاره‌ای (IC): هر دوره از بین ۴ قانون نامزد رأی می‌دهی؛ قانون برنده تا دوره بعد روی همه کشورها اعمال می‌شود (صلح، رونق گردشگری، بازار آزاد و...). هر کشور یک رأی دارد و می‌توانی رأیت را عوض کنی.",
-    "• 🎯 مأموریت و دستاورد: هر روز و هر هفته یک مأموریت با جایزه داری (اکتشاف، کشف معدن، معامله در بورس، درآمد گردشگری و...) و ۱۲ دستاورد دائمی با مدال و جایزه در پروفایل کشورت ثبت می‌شود."
+    "• 🎯 مأموریت و دستاورد: هر روز و هر هفته یک مأموریت با جایزه داری (اکتشاف، کشف معدن، معامله در بورس، درآمد گردشگری و...) و ۱۲ دستاورد دائمی با مدال و جایزه در پروفایل کشورت ثبت می‌شود.",
+    "• 📜 سیاست‌های داخلی: در ۱۰ دسته (اقتصاد، مهاجرت، رفاه، آموزش، نظامی، انرژی، فرهنگ، صنعت، نظم، فضا) برای کشورت سیاست انتخاب می‌کنی؛ هر سیاست یک سود و یک هزینه دارد و از هر دسته فقط یکی فعال است. عوض کردن هر دسته ۱۲ ساعت قفل دارد و می‌توانی هر دسته را روی «بدون سیاست» بگذاری."
     "• 👶 زاد و ولد و مرگ‌ومیر: هر ساعت در کشورت تولد و مرگ رخ می‌دهد؛ رضایت بالا و بیمارستان تولد را بیشتر و مرگ‌ومیر را کمتر می‌کند و گرسنگی مرگ‌ومیر را شدید بالا می‌برد. همه سیستم‌های زنده بازی (اقتصاد، جمعیت، رضایت، امتیاز تحقیق، مهاجرت) ساعتی کار می‌کنند؛ گزارش کامل هر روز می‌آید.\n"
     "• 🏆 رتبه‌بندی را می‌توانی بر اساس قدرت ملی، امتیاز اقتصادی، امتیاز علمی، جمعیت یا مساحت مرتب کنی. امتیاز اقتصادی از تولید روزانه، ساختمان‌ها و معادن می‌آید (پولِ انباشته به‌تنهایی رتبه نمی‌آورد) و امتیاز علمی از تحقیقات کامل‌شده و سرعت تولید امتیاز تحقیق.\n"
     "• 🎛️ لازم نیست دکمه‌های پایین صفحه را بزنی: اسم هر بخش را فقط بنویس (مثل «لیدربورد»، «تجارت»، «کشور من» یا «منو») تا همان بخش به صورت منوی شیشه‌ای باز شود. منوها در گروه هم فقط برای خودت کار می‌کنند.\n"
@@ -595,7 +597,7 @@ async def trade_buy(cb: types.CallbackQuery):
     seller = await dbm.get_country(offer["seller_id"])
     if not seller or not seller.get("alive"):
         await dbm.db.trade_offers.delete_one({"_id": oid}); await cb.answer("فروشنده دیگر فعال نیست.", show_alert=True); return
-    fee = 0 if (seller["user_id"] in c["neighbors"] or await council_active() == "free_market") else int(offer["price"] * 0.05)
+    fee = 0 if (seller["user_id"] in c["neighbors"] or await council_active() == "free_market") else int(offer["price"] * 0.05 * trade_fee_mult(c))
     total = offer["price"] + fee
     if c["money"] < total:
         await cb.answer(f"پول کافی نداری ({c['money']:,}/{total:,})", show_alert=True); return
@@ -771,7 +773,7 @@ async def fx_amount(msg: types.Message, state: FSMContext):
     r = data["resource"]
     mkt = await get_market()
     price = mkt["prices"][r]
-    fee_rate = 0.0 if await council_active() == "free_market" else 0.02
+    fee_rate = 0.0 if await council_active() == "free_market" else 0.02 * trade_fee_mult(c)
     if data["side"] == "buy":
         cost = math.ceil(amount * price * (1 + fee_rate))
         if c["money"] < cost:
@@ -1005,7 +1007,7 @@ async def dt_accept(cb: types.CallbackQuery):
             await dbm.save_country(seller)
         await cb.message.edit_text("❌ ترید لغو شد (یکی از طرفین دیگر کشور فعالی ندارد) و منابع به فروشنده برگشت.")
         await cb.answer(); return
-    fee = 0 if doc["buyer_id"] in seller["neighbors"] else int(doc["price"] * 0.05)
+    fee = 0 if doc["buyer_id"] in seller["neighbors"] else int(doc["price"] * 0.05 * trade_fee_mult(seller))
     if buyer["money"] < doc["price"]:
         await cb.answer(f"پول کافی نداری ({buyer['money']:,}/{doc['price']:,} 💰)", show_alert=True); return
     buyer["money"] -= doc["price"]
@@ -1295,7 +1297,7 @@ def glass_kb():
                      ("💰 درآمد و مالی", "finance"), ("🧳 مهاجرت", "migration"),
                      ("🏖️ گردشگری", "tourism"), ("🏙️ شهرها", "cities"),
                      ("🚀 برنامه فضایی", "space"), ("🗳️ شورای بین‌سیاره‌ای", "council"),
-                     ("🎯 مأموریت و دستاورد", "quests"), ("❓ راهنما", "guide")]:
+                     ("🎯 مأموریت و دستاورد", "quests"), ("📜 سیاست‌های داخلی", "policies"), ("❓ راهنما", "guide")]:
         kb.button(text=txt, callback_data=f"menu:go:{key}")
     kb.button(text="✖️ بستن", callback_data="close")
     kb.adjust(2, 2, 2, 2, 2, 2, 2, 2, 2, 2)
@@ -1328,6 +1330,8 @@ async def render_section(key: str, c: dict):
         return space_view(c)
     if key == "council":
         return await council_view(c)
+    if key == "policies":
+        return policies_view(c)
     if key == "quests":
         text, kb, dirty = quests_view(c)
         if dirty:
@@ -1411,7 +1415,7 @@ TEXT_TRIGGERS = {
     "شهرها": "cities", "شهر": "cities", "cities": "cities",
     "فضا": "space", "برنامه فضایی": "space", "ماهواره": "space", "space": "space",
     "شورا": "council", "شورای بین‌سیاره‌ای": "council", "رأی": "council", "رأی‌گیری": "council", "قانون": "council", "council": "council", "vote": "council",
-    "مأموریت": "quests", "ماموریت": "quests", "رای": "council", "رای‌گیری": "council", "دستاورد": "quests", "دستاوردها": "quests", "quests": "quests", "missions": "quests",
+    "مأموریت": "quests", "ماموریت": "quests", "سیاست": "policies", "سیاست‌ها": "policies", "سیاست داخلی": "policies", "policies": "policies", "رای": "council", "رای‌گیری": "council", "دستاورد": "quests", "دستاوردها": "quests", "quests": "quests", "missions": "quests",
     "راهنما": "guide", "کمک": "guide",
     "منو": "menu", "منوی اصلی": "menu", "menu": "menu",
 }
@@ -1673,7 +1677,7 @@ async def space_start(cb: types.CallbackQuery):
     if not can_pay(c, cost):
         await cb.answer(f"منابع کافی نداری. هزینه: {cost_text(cost)}", show_alert=True); return
     pay_cost(c, cost)
-    sp["building"] = {"id": pid, "finish_ts": logic.now_ts() + SPACE_PROJECTS[pid]["hours"] * 3600}
+    sp["building"] = {"id": pid, "finish_ts": logic.now_ts() + int(SPACE_PROJECTS[pid]["hours"] * 3600 * (1 + logic.mod(c, "space_time")))}
     c["space"] = sp
     await dbm.save_country(c)
     text, kb = space_view(c)
@@ -1683,6 +1687,105 @@ async def space_start(cb: types.CallbackQuery):
         pass
     await cb.answer(f"🚀 ساخت «{SPACE_PROJECTS[pid]['fa']}» شروع شد!")
 
+
+# ---------------------------------------------------------------- domestic policies
+POLICY_COOLDOWN = 12 * 3600
+
+def trade_fee_mult(c: dict) -> float:
+    """Market-fee multiplier from the 'trade' mod (policies/research):
+    positive trade skill discounts the fee, floored at 25% of the base fee."""
+    return max(0.25, 1 - logic.mod(c, "trade"))
+
+def policies_view(c: dict):
+    lines = ["📜 سیاست‌های داخلی — از هر دسته حداکثر یک سیاست فعال می‌شود و عوض کردن هر دسته ۱۲ ساعت قفل دارد.", ""]
+    kb = InlineKeyboardBuilder()
+    pol = c.get("policies", {})
+    for cat, data in POLICIES.items():
+        cur = data["options"].get(pol.get(cat), {}).get("fa") if pol.get(cat) else "🚫 بدون سیاست"
+        lines.append(f"{data['fa']}: {cur}")
+        kb.button(text=data["fa"], callback_data=f"pol:cat:{cat}")
+    kb.adjust(1)
+    kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(1)
+    return "\n".join(lines), kb.as_markup()
+
+def policy_cat_view(c: dict, cat: str):
+    data = POLICIES[cat]
+    cur = c.get("policies", {}).get(cat)
+    left = POLICY_COOLDOWN - (logic.now_ts() - c.get("policy_ts", {}).get(cat, 0))
+    lines = [f"{data['fa']} — سیاست این دسته را انتخاب کن:"]
+    if left > 0:
+        lines.append(f"🔒 این دسته {left // 3600} ساعت و {(left % 3600) // 60} دقیقه دیگر قفل است.")
+    lines.append("")
+    kb = InlineKeyboardBuilder()
+    for key, o in data["options"].items():
+        mark = "✅ " if cur == key else ""
+        lines.append(f"{mark}{o['fa']}\n{o['desc']}")
+        kb.button(text=f"{mark}{o['fa']}", callback_data=f"pol:set:{cat}:{key}")
+    mark = "✅ " if not cur else ""
+    lines.append(f"{mark}🚫 بدون سیاست\nهیچ اثر خاصی ندارد.")
+    kb.button(text=f"{mark}🚫 بدون سیاست", callback_data=f"pol:set:{cat}:none")
+    kb.adjust(1)
+    kb.button(text="🔙 سیاست‌ها", callback_data="menu:go:policies")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(1)
+    return "\n".join(lines), kb.as_markup()
+
+@dp.message(F.text == "📜 سیاست‌های داخلی")
+@dp.message(Command("policies"))
+async def cmd_policies(msg: types.Message):
+    if not await gate(msg): return
+    c = await my_country(msg)
+    if not c: return
+    text, kb = policies_view(c)
+    sent = await msg.answer(text, reply_markup=kb)
+    await track_menu(sent, msg.from_user.id)
+
+@dp.callback_query(F.data.startswith("pol:cat:"))
+async def pol_cat(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    cat = cb.data.split(":")[2]
+    if cat not in POLICIES:
+        await cb.answer(); return
+    text, kb = policy_cat_view(c, cat)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("pol:set:"))
+async def pol_set(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    _, _, cat, opt = cb.data.split(":")
+    if cat not in POLICIES or (opt != "none" and opt not in POLICIES[cat]["options"]):
+        await cb.answer(); return
+    pol = c.setdefault("policies", {})
+    cur = pol.get(cat)
+    new = None if opt == "none" else opt
+    if new == cur:
+        await cb.answer("همین گزینه همین حالا هم فعال است.", show_alert=True); return
+    ts = c.setdefault("policy_ts", {})
+    left = POLICY_COOLDOWN - (logic.now_ts() - ts.get(cat, 0))
+    if left > 0:
+        await cb.answer(f"🔒 این دسته قفل است؛ {left // 3600} ساعت و {(left % 3600) // 60} دقیقه دیگر می‌توانی عوضش کنی.", show_alert=True); return
+    if new is None:
+        pol.pop(cat, None)
+        label = "🚫 بدون سیاست"
+    else:
+        pol[cat] = new
+        label = POLICIES[cat]["options"][new]["fa"]
+    ts[cat] = logic.now_ts()
+    await dbm.save_country(c)
+    text, kb = policy_cat_view(c, cat)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await cb.answer(f"✅ سیاست «{POLICIES[cat]['fa']}» شد: {label}")
 
 # ---------------------------------------------------------------- Interplanetary Council (IC)
 async def get_council() -> dict:
