@@ -395,12 +395,21 @@ def upkeep_factor(c: dict) -> float:
     upkeeps: building upkeep had reached ~70% of a developed country's
     gross income, which the owner judged far too high.)"""
     total = sum(c["buildings"].values())
-    return 1 + max(0, total - 15) * 0.03 + max(0, total - 30) * 0.05
+    # hard ceiling x6: the unbounded curve reached x86 at ~1,060 buildings
+    # (a real factory-spam country paid 680k/day upkeep on ~800k gross income)
+    return min(6.0, 1 + max(0, total - 15) * 0.03 + max(0, total - 30) * 0.05)
 
 def building_upkeep(c: dict) -> int:
     b = c["buildings"]
     base = sum(BUILDINGS[k]["upkeep"] * v for k, v in b.items())
     return int(base * (1 + mod(c, "upkeep")) * upkeep_factor(c))
+
+UPKEEP_INCOME_CAP = 0.35  # building upkeep never exceeds 35% of gross daily income
+
+def effective_building_upkeep(c: dict, gross_income: float) -> int:
+    """building_upkeep with the hard guarantee: at most UPKEEP_INCOME_CAP of
+    the day's gross (tax + factory) income, however many buildings exist."""
+    return min(building_upkeep(c), int(max(0.0, gross_income) * UPKEEP_INCOME_CAP))
 
 def capacity(c: dict) -> int:
     """Soft population capacity of the land: area x 60 people."""
@@ -456,12 +465,12 @@ def econ_tick(c: dict, frac: float = 1.0):
         c["res"][r] = max(0, int(c["res"].get(r, 0) + applied))
     tax_factor = {1: 0.6, 2: 1.0, 3: 1.6}[c["tax_rate"]]
     income = c["population"] * TAX_PER_CAPITA * tax_factor * (1 + mod(c, "economy")) * (1 + mod(c, "tax"))
-    ub = building_upkeep(c)
     ua = c.get("soldiers", 0) * 0.15 * (1 + mod(c, "soldier_upkeep"))
     civic = c["population"] * 0.0008 * (1 + mod(c, "civic"))
     factory_income = b.get("factory", 0) * FACTORY_INCOME * (1 + mod(c, "factory"))
     if law(c) == "industrial_boom":
         factory_income = int(factory_income * 1.5)
+    ub = effective_building_upkeep(c, income + factory_income)
     net = (income + factory_income - ub - ua - civic) * frac
     cm = carry.get("__money__", 0.0) + net
     whole = int(cm) if cm >= 0 else -int(-cm)

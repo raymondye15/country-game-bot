@@ -804,9 +804,11 @@ def finance_text(c: dict) -> str:
     prod = logic.production(c)
     b = c["buildings"]
     tax_factor = {1: 0.6, 2: 1.0, 3: 1.6}[c["tax_rate"]]
-    est_tax = int(c["population"] * logic.TAX_PER_CAPITA * tax_factor * (1 + logic.mod(c, "economy")))
-    est_upkeep = (logic.building_upkeep(c)
-                  + int(c.get("soldiers", 0) * 0.15) + int(c["population"] * 0.0008))
+    est_tax = int(c["population"] * logic.TAX_PER_CAPITA * tax_factor * (1 + logic.mod(c, "economy")) * (1 + logic.mod(c, "tax")))
+    est_factory = int(b.get("factory", 0) * logic.FACTORY_INCOME * (1 + logic.mod(c, "factory")))
+    est_upkeep = (logic.effective_building_upkeep(c, est_tax + est_factory)
+                  + int(c.get("soldiers", 0) * 0.15 * (1 + logic.mod(c, "soldier_upkeep")))
+                  + int(c["population"] * 0.0008 * (1 + logic.mod(c, "civic"))))
     cap = logic.capacity(c)
     lines = [f"💰 درآمد و مالی «{c['name']}»", f"خزانه: {c['money']:,} 💰", ""]
     fd = c.get("fin_day", {})
@@ -827,7 +829,7 @@ def finance_text(c: dict) -> str:
     lines += [f"🔮 برآورد امروز: مالیات ~{est_tax:,} 💰 | هزینه‌ها ~{est_upkeep:,} 💰"]
     factor = logic.upkeep_factor(c)
     if factor > 1:
-        lines.append(f"🏗️ ضریب نگهداری ساختمان‌ها: ×{factor:.1f} (از ۱۰ ساختمان به بعد، هزینه نگهداری به‌صورت تصاعدی بالا می‌رود)")
+        lines.append(f"🏗️ ضریب نگهداری ساختمان‌ها: ×{factor:.1f} (از ۱۵ ساختمان به بعد بالا می‌رود؛ سقف ضریب ×۶ است و هزینه نگهداری هرگز از ۳۵٪ درآمد روزانه بیشتر نمی‌شود)")
     lines += ["", "🏭 تولید روزانه (ناخالص):"]
     for r, v in prod.items():
         if v:
