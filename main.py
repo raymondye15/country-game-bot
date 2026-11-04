@@ -429,30 +429,81 @@ def build_view(c: dict, back: bool = False):
     for bid, b in BUILDINGS.items():
         cost = "، ".join(f"{k}:{v}" for k, v in b["cost"].items())
         lines.append(f"{b['fa']} — سطح {c['buildings'].get(bid, 0)} ({b['desc']})\nهزینه ساخت: {cost}")
-        kb.button(text=f"ساخت {b['fa']}", callback_data=f"build:{bid}")
+        kb.button(text=f"ساخت {b['fa']}", callback_data=f"bld:{bid}")
     kb.adjust(1)
     if back:
         kb.button(text="🔙 منوی اصلی", callback_data="menu:open")
     kb.button(text="✖️ بستن", callback_data="close")
     return "\n".join(lines), kb.as_markup()
 
-@dp.callback_query(F.data.startswith("build:"))
-async def build_cb(cb: types.CallbackQuery):
+def bulk_max(c: dict, cost: dict, cap: int = 500) -> int:
+    """How many copies of a building the country can afford right now."""
+    n = cap
+    for k, v in cost.items():
+        if v <= 0:
+            continue
+        have = c["money"] if k == "money" else c["res"].get(k, 0)
+        n = min(n, int(have // v))
+    return max(0, n)
+
+def build_qty_view(c: dict, bid: str):
+    b = BUILDINGS[bid]
+    maxn = bulk_max(c, b["cost"])
+    lines = [f"{b['fa']} — سطح فعلی: {c['buildings'].get(bid, 0)}",
+             f"هزینه هر واحد: {cost_text(b['cost'])}",
+             f"با منابع فعلی حداکثر {maxn} تا می‌توانی بسازی. چند تا بسازم؟"]
+    kb = InlineKeyboardBuilder()
+    for n in (1, 5, 10, 25, 50):
+        kb.button(text=f"×{n}", callback_data=f"bldq:{bid}:{n}")
+    if maxn > 1:
+        kb.button(text=f"🔝 حداکثر ({maxn})", callback_data=f"bldq:{bid}:max")
+    kb.adjust(3, 3)
+    kb.button(text="🔙 ساختمان‌ها", callback_data="menu:go:build")
+    kb.button(text="✖️ بستن", callback_data="close")
+    kb.adjust(2)
+    return "\n".join(lines), kb.as_markup()
+
+@dp.callback_query(F.data.startswith("bld:"))
+async def bld_cb(cb: types.CallbackQuery):
     c = await my_country(cb)
     if not c: return
     bid = cb.data.split(":")[1]
+    if bid not in BUILDINGS:
+        await cb.answer(); return
+    text, kb = build_qty_view(c, bid)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("bldq:"))
+async def bldq_cb(cb: types.CallbackQuery):
+    c = await my_country(cb)
+    if not c: return
+    _, bid, ns = cb.data.split(":")
+    if bid not in BUILDINGS:
+        await cb.answer(); return
     cost = BUILDINGS[bid]["cost"]
-    for k, v in cost.items():
-        have = c["money"] if k == "money" else c["res"].get(k, 0)
-        if have < v:
-            await cb.answer(f"منابع کافی نداری ({k}: {have}/{v})", show_alert=True); return
-    for k, v in cost.items():
-        if k == "money": c["money"] -= v
-        else: c["res"][k] = c["res"].get(k, 0) - v
-    c["buildings"][bid] = c["buildings"].get(bid, 0) + 1
-    logic.stat_add(c, "built")
+    n = bulk_max(c, cost) if ns == "max" else int(ns)
+    if n <= 0:
+        await cb.answer("منابع کافی نداری.", show_alert=True); return
+    total = {k: v * n for k, v in cost.items()}
+    if not can_pay(c, total):
+        n = bulk_max(c, cost)
+        if n <= 0:
+            await cb.answer("منابع کافی نداری.", show_alert=True); return
+        total = {k: v * n for k, v in cost.items()}
+    pay_cost(c, total)
+    c["buildings"][bid] = c["buildings"].get(bid, 0) + n
+    logic.stat_add(c, "built", n)
     await dbm.save_country(c)
-    await cb.message.answer(f"✅ {BUILDINGS[bid]['fa']} ساخته شد — سطح {c['buildings'][bid]}")
+    text, kb = build_qty_view(c, bid)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await cb.message.answer(f"✅ {n} × {BUILDINGS[bid]['fa']} ساخته شد — سطح {c['buildings'][bid]}")
     await cb.answer()
 
 # ---------------------------------------------------------------- research
@@ -2177,6 +2228,30 @@ async def run_tick() -> dict:
         await dbm.db.meta.update_one({"_id": "market"},
             {"$set": {"prev": mkt["prices"], "prices": new_prices, "pressure": {}, "updated": t}},
             upsert=True)
+    # one-time compensation (2026-11-04): the unbounded upkeep factor (up to
+    # x86) overcharged building-heavy countries for days. Every alive country
+    # is credited 500,000 and notified (DM + every known group); the
+    # per-country marker makes the credit crash-safe, the meta flag gates the
+    # group broadcast.
+    if not (await dbm.db.meta.find_one({"_id": "grant_upkeep_20261104"})):
+        gtext = ("🎁 جبران هزینه‌های نگهداری\n\n"
+                 "به دلیل ایراد در ضریب نگهداری ساختمان‌ها که باعث هزینه‌های غیرعادی برای بعضی کشورها شده بود، این مشکل به‌طور کامل اصلاح شد: از این به بعد ضریب نگهداری حداکثر ×۶ است و هزینه نگهداری هرگز از ۳۵٪ درآمد روزانه بیشتر نمی‌شود.\n"
+                 "برای جبران، به همه کشورها ۵۰۰٬۰۰۰ 💰 تقدیم شد و به خزانه‌ات اضافه شد. 🙏\n\n"
+                 "🌍 موفق باشید!")
+        for gc in await dbm.all_alive_countries():
+            if gc.get("grant_upkeep_20261104"):
+                continue
+            gc["money"] = gc.get("money", 0) + 500000
+            gc["grant_upkeep_20261104"] = True
+            await dbm.save_country(gc)
+            await notify(gc["user_id"], gtext)
+        async for g in dbm.db.groups.find({}):
+            try:
+                await bot.send_message(g["chat_id"], gtext)
+            except Exception:
+                pass
+        await dbm.db.meta.update_one({"_id": "grant_upkeep_20261104"},
+            {"$set": {"done": True, "ts": t}}, upsert=True)
     countries = await dbm.all_alive_countries()
     # one-time migration: legacy 'special' offers/trades -> seller's planet special
     _planet_of = {c["user_id"]: c["planet"] for c in countries}
