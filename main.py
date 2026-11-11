@@ -2252,6 +2252,39 @@ async def run_tick() -> dict:
                 pass
         await dbm.db.meta.update_one({"_id": "grant_upkeep_20261104"},
             {"$set": {"done": True, "ts": t}}, upsert=True)
+    # one-time reset (2026-11-11): hundreds of accidentally bulk-built
+    # hospitals exploded one country's population (hospital effects stacked
+    # with no cap at all). ALL hospitals are removed from every country, the
+    # affected country's population is restored to its pre-incident level
+    # (929,052 - from the owner's own 2026-11-04 finance report, before the
+    # bulk-build feature existed), and cumulative building effects now have
+    # diminishing returns (logic.eff_count). Marker-guarded like the grant.
+    if not (await dbm.db.meta.find_one({"_id": "hospital_reset_20261111"})):
+        htext = ("🏥 اطلاعیه مهم — اصلاح بیمارستان‌ها و بالانس ساختمان‌ها\n\n"
+                 "به دلیل یک اشتباه در ساخت‌وساز، تعداد زیادی بیمارستان در یک کشور ساخته شد و چون اثر بیمارستان‌ها بدون سقف روی هم جمع می‌شد، جمعیت آن کشور به‌صورت غیرعادی و خارج از کنترل رشد کرد.\n\n"
+                 "اقدامات انجام‌شده:\n"
+                 "• بیمارستان‌های همه بازیکن‌ها صفر شد تا تعادل به بازی برگردد.\n"
+                 "• جمعیت کشور آسیب‌دیده به مقدار قبلی‌اش برگردانده شد.\n"
+                 "• از این به بعد اثر تجمعی همه ساختمان‌ها (بیمارستان، دانشگاه، پادگان، ساختمان معدن، هتل و…) سقف و بازده نزولی دارد: ۱۰ ساختمان اول اثر کامل می‌دهند و بعد از آن هر ساختمان اثر کمتری اضافه می‌کند؛ دیگر با اسپم یک ساختمان نمی‌شود بازی را شکست.\n\n"
+                 "از درک و همراهی‌تان ممنونیم 🙏\n🌍 موفق باشید!")
+        for gc in await dbm.all_alive_countries():
+            if gc.get("hospital_reset_20261111"):
+                continue
+            gc.setdefault("buildings", {})["hospital"] = 0
+            if gc.get("name_lower") == "terralegero" and gc["population"] > 929052:
+                delta = 929052 - gc["population"]
+                gc["population"] = 929052
+                logic.adjust_cities(gc, delta)
+            gc["hospital_reset_20261111"] = True
+            await dbm.save_country(gc)
+            await notify(gc["user_id"], htext)
+        async for g in dbm.db.groups.find({}):
+            try:
+                await bot.send_message(g["chat_id"], gtext)
+            except Exception:
+                pass
+        await dbm.db.meta.update_one({"_id": "hospital_reset_20261111"},
+            {"$set": {"done": True, "ts": t}}, upsert=True)
     countries = await dbm.all_alive_countries()
     # one-time migration: legacy 'special' offers/trades -> seller's planet special
     _planet_of = {c["user_id"]: c["planet"] for c in countries}

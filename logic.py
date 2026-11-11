@@ -249,7 +249,7 @@ def mine_chance_now(c: dict) -> float:
 
 def military_power(c: dict) -> int:
     base = c["soldiers"] * (1 + mod(c, "military"))
-    base *= 1 + 0.15 * c["buildings"].get("barracks", 0)
+    base *= 1 + 0.15 * min(eff_count(c["buildings"].get("barracks", 0)), 40)
     return int(base)
 
 def defense_power(c: dict) -> int:
@@ -281,7 +281,7 @@ def migrate_special_split(c: dict) -> bool:
 def production(c: dict) -> dict:
     """Gross daily production of every resource (used by the tick and the finance view)."""
     b = c["buildings"]
-    mine_bonus = 1 + 0.25 * b.get("mine", 0)
+    mine_bonus = 1 + 0.25 * min(eff_count(b.get("mine", 0)), 40)
     prod = {
         "food": (4000 + b.get("farm", 0) * 4000) * (1 + mod(c, "food_prod")),
         "water": (3000 + b.get("waterplant", 0) * 4000) * (1 + mod(c, "water_prod")),
@@ -328,7 +328,7 @@ def sci_score(c: dict):
     Returns (total, breakdown)."""
     done = sum(RESEARCH[r]["cost"] for r in c.get("researched", []) if r in RESEARCH)
     space_pts = sum(SPACE_PROJECTS[p]["score"] for p in space_done(c) if p in SPACE_PROJECTS)
-    rp_day = (2 + c["buildings"].get("university", 0) * 6
+    rp_day = (2 + int(eff_count(c["buildings"].get("university", 0))) * 6
               + city_levels(c, "science") * 2 + space_rp_day(c))
     parts = {"done": done, "rp_day": rp_day, "space": space_pts}
     return done + space_pts + rp_day * 5, parts
@@ -350,7 +350,7 @@ def tourism_rates(c: dict) -> dict:
     if hotels <= 0:
         return {"arrivals": 0.0, "spend": 0.0, "cap": 0, "offplanet": False}
     offplanet = c["buildings"].get("airport_inter", 0) > 0
-    arrivals = hotels * 120 * (0.6 + level * 0.35) * (0.5 + c["happiness"] / 100.0)
+    arrivals = eff_count(hotels) * 120 * (0.6 + level * 0.35) * (0.5 + c["happiness"] / 100.0)
     arrivals *= 1 + 0.12 * city_levels(c, "tourism")
     if law(c) == "tourism_boom":
         arrivals *= 1.5
@@ -367,7 +367,7 @@ def tourism_rates(c: dict) -> dict:
         spend *= 1.5   # off-planet tourists are richer
     arrivals *= 1 + mod(c, "tourism_arrivals")
     spend *= 1 + mod(c, "tourism_spend")
-    return {"arrivals": arrivals, "spend": spend, "cap": hotels * 300, "offplanet": offplanet}
+    return {"arrivals": arrivals, "spend": spend, "cap": int(eff_count(hotels)) * 300, "offplanet": offplanet}
 
 def next_market_price(price: float, base: float, net_volume: float, rng) -> float:
     """One hourly step of the global market price: mean reversion to the base
@@ -386,6 +386,19 @@ def national_power(c: dict) -> int:
     sci, _ = sci_score(c)
     tour, _ = tourism_score(c)
     return int(eco * 0.40 + sci * 0.25 + tour * 0.10 + c["population"] / 5000 + military_power(c) / 5)
+
+def eff_count(n, full: int = 10) -> float:
+    """Effective building count for cumulative stat effects - diminishing
+    returns. The first `full` buildings count in full; beyond that the
+    effective count grows with sqrt((n-full)*full): 20 -> 20, 100 -> 40,
+    1000 -> ~110 (instead of 100 / 1000). Stops single-building spam from
+    breaking the simulation (2026-11-11: hundreds of hospitals pinned
+    happiness at 100 and multiplied the birth rate, exploding one
+    country's population out of control)."""
+    n = max(0, int(n))
+    if n <= full:
+        return float(n)
+    return full + math.sqrt((n - full) * full)
 
 def upkeep_factor(c: dict) -> float:
     """Progressive upkeep (late-game money sink): free up to 15 buildings,
@@ -513,7 +526,7 @@ def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
         c["shortage_hours"] = 0
     c["shortage_days"] = c.get("shortage_hours", 0) // 24
     # research points: hourly share of the daily 2 + 6 per university
-    rp_rate = 2 + b.get("university", 0) * 6 + city_levels(c, "science") * 2 + space_rp_day(c)
+    rp_rate = 2 + int(eff_count(b.get("university", 0))) * 6 + city_levels(c, "science") * 2 + space_rp_day(c)
     if law(c) == "science_week":
         rp_rate = int(rp_rate * 1.5)
     rp_f = carry.get("rp", 0.0) + rp_rate * hours / 24
@@ -521,7 +534,7 @@ def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
     c["rp"] += rp_add
     c["day_rp"] = c.get("day_rp", 0) + rp_add
     # happiness: drift toward the target (the old daily step moved halfway/day)
-    h_target = 55 + mod(c, "happiness") + b.get("hospital", 0) * 2 + b.get("university", 0)
+    h_target = 55 + mod(c, "happiness") + 2 * min(eff_count(b.get("hospital", 0)), 10) + min(eff_count(b.get("university", 0)), 10)
     h_target -= {1: -4, 2: 0, 3: 9}[c["tax_rate"]]
     if shortage:
         # consecutive shortage hurts more and more (scaled from days to hours)
@@ -535,8 +548,9 @@ def hourly_tick(c: dict, t: int = None, hours: int = 1) -> dict:
     c["happiness"] = max(0.0, min(100.0, c["happiness"]))
     # ---- births & deaths ----
     hosp = b.get("hospital", 0)
-    births_rate = (0.0050 * (0.8 + c["happiness"] / 100 * 0.45) + hosp * 0.0002) * (1 + mod(c, "pop_growth"))
-    deaths_rate = 0.0024 * (1.35 - c["happiness"] / 100 * 0.55) * (1 - min(0.4, hosp * 0.06))
+    hosp_eff = eff_count(hosp)
+    births_rate = (0.0050 * (0.8 + c["happiness"] / 100 * 0.45) + min(0.004, hosp_eff * 0.0002)) * (1 + mod(c, "pop_growth"))
+    deaths_rate = 0.0024 * (1.35 - c["happiness"] / 100 * 0.55) * (1 - min(0.4, hosp_eff * 0.06))
     if shortage:
         births_rate *= 0.55
         deaths_rate *= 2.3
